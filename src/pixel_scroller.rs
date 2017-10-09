@@ -10,10 +10,9 @@ use std::thread;
 use std::mem;
 use std::sync::Arc;
 
-pub const PIXEL_SCROLLER: NodeDescriptor = NodeDescriptor {
-    name: "PixelScroller",
-    new: new_pixel_scroller,
-};
+pub fn pixel_scroller() -> NodeDescriptor {
+    NodeDescriptor { name: "PixelScroller".into(), new: new_pixel_scroller }
+}
 
 fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 0));
@@ -70,7 +69,8 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
             let _ = lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width));
             let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
             if available_pixels >= width {
-                let frames = lock.read_n::<u32>(InPortID(0), available_pixels / width * width).unwrap();
+                let frames = lock.read_n::<u32>(InPortID(0), available_pixels / width * width)
+                    .unwrap();
                 drop(lock);
 
                 for frame in frames.chunks(width) {
@@ -92,7 +92,11 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                     time += 1;
                 }
                 canvas
-                    .copy(&texture, Some(Rect::new(0, scroll_pos, width as u32, height as u32 / 2)), None)
+                    .copy(
+                        &texture,
+                        Some(Rect::new(0, scroll_pos, width as u32, height as u32 / 2)),
+                        None,
+                    )
                     .unwrap();
                 canvas.present();
             }

@@ -15,4 +15,3 @@ apodize = "*"
 [lib]
 name = "flow_plugs"
 crate-type = ["dylib"]
-

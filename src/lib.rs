@@ -1,9 +1,9 @@
 #![feature(catch_expr)]
 
-extern crate modular_flow;
-extern crate flow_synth;
 extern crate apodize;
+extern crate flow_synth;
 extern crate jack;
+extern crate modular_flow;
 extern crate palette;
 extern crate rustfft;
 extern crate sdl2;
@@ -15,18 +15,17 @@ mod pixel_scroller;
 use flow_synth::control::NodeDescriptor;
 
 #[no_mangle]
-pub extern "Rust" fn get_name() -> &'static str {
-    "essentials"
+pub fn get_name() -> String {
+    "essentials".into()
 }
 
 #[no_mangle]
-pub extern "Rust" fn get_descriptors() -> Vec<NodeDescriptor> {
+pub fn get_descriptors() -> Vec<NodeDescriptor> {
     vec![
-        audio_io::AUDIO_IO,
-        stft::STFT,
-        stft::ISTFT,
-        stft::SPECTROGRAM_RENDER,
-        pixel_scroller::PIXEL_SCROLLER,
+        audio_io::audio_io(),
+        stft::stft(),
+        stft::istft(),
+        stft::spectrogram_render(),
+        pixel_scroller::pixel_scroller(),
     ]
 }
-

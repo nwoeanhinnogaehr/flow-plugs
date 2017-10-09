@@ -13,10 +13,9 @@ use std::sync::Arc;
 
 type T = f32; // fix this because generic numbers are so annoying
 
-pub const STFT: NodeDescriptor = NodeDescriptor {
-    name: "STFT",
-    new: new_stft,
-};
+pub fn stft() -> NodeDescriptor {
+    NodeDescriptor { name: "STFT".into(), new: new_stft }
+}
 
 fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 1));
@@ -32,11 +31,11 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
         node,
         vec![
             message::Desc {
-                name: "Add port",
+                name: "Add port".into(),
                 args: vec![],
             },
             message::Desc {
-                name: "Remove port",
+                name: "Remove port".into(),
                 args: vec![],
             },
         ],
@@ -47,7 +46,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     thread::spawn(move || {
         let mut empty_q = VecDeque::<T>::new();
         empty_q.extend(vec![0.0; size - hop]);
-        let mut queues = vec![empty_q.clone()];
+        let mut queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
         let mut input = vec![Complex::zero(); size];
         let mut output = vec![Complex::zero(); size];
 
@@ -56,7 +55,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
         while !ctl.stopped() {
             while let Some(msg) = ctl.recv_message() {
-                match msg.desc.name {
+                match msg.desc.name.as_str() {
                     "Add port" => {
                         node_ctx.node().push_in_port();
                         node_ctx.node().push_out_port();
@@ -72,8 +71,12 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             }
             node_ctx.lock_all().sleep(); // wait for next event
             let res: Result<()> = do catch {
-                for ((in_port, out_port), queue) in
-                    node_ctx.node().in_ports().iter().zip(node_ctx.node().out_ports()).zip(queues.iter_mut())
+                for ((in_port, out_port), queue) in node_ctx
+                    .node()
+                    .in_ports()
+                    .iter()
+                    .zip(node_ctx.node().out_ports())
+                    .zip(queues.iter_mut())
                 {
                     {
                         let lock = node_ctx.lock(&[in_port.clone()], &[]);
@@ -103,53 +106,86 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     remote_ctl
 }
 
-pub const ISTFT: NodeDescriptor = NodeDescriptor {
-    name: "ISTFT",
-    new: new_istft,
-};
+pub fn istft() -> NodeDescriptor {
+    NodeDescriptor { name: "ISTFT".into(), new: new_istft }
+}
 
 fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
-    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(2, 2));
+    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 1));
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
-    let remote_ctl = Arc::new(RemoteControl::new(ctx, node.clone(), vec![]));
+    let remote_ctl = Arc::new(RemoteControl::new(
+        ctx,
+        node.clone(),
+        vec![
+            message::Desc {
+                name: "Add port".into(),
+                args: vec![],
+            },
+            message::Desc {
+                name: "Remove port".into(),
+                args: vec![],
+            },
+        ],
+    ));
     let size = 4096;
     let hop = 256;
     let window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     let ctl = remote_ctl.clone();
     thread::spawn(move || {
-        let mut queues = vec![
-            {
-                let mut q = VecDeque::<T>::new();
-                q.extend(vec![0.0; size - hop]);
-                q
-            };
-            node.in_ports().len()
-        ];
+        let mut empty_q = VecDeque::<T>::new();
+        empty_q.extend(vec![0.0; size - hop]);
+        let mut queues = vec![empty_q.clone(); node.in_ports().len()];
         let mut output = vec![Complex::zero(); size];
 
         let mut planner = FFTplanner::new(true);
         let fft = planner.plan_fft(size);
 
         while !ctl.stopped() {
+            while let Some(msg) = ctl.recv_message() {
+                match msg.desc.name.as_str() {
+                    "Add port" => {
+                        node_ctx.node().push_in_port();
+                        node_ctx.node().push_out_port();
+                        queues.push(empty_q.clone());
+                    }
+                    "Remove port" => {
+                        node_ctx.node().pop_in_port(ctl.context().graph());
+                        node_ctx.node().pop_out_port(ctl.context().graph());
+                        queues.pop();
+                    }
+                    _ => panic!(),
+                }
+            }
+            node_ctx.lock_all().sleep(); // wait for next event
             let res: Result<()> = do catch {
-                for ((in_port, out_port), queue) in
-                    node.in_ports().iter().zip(node.out_ports()).zip(queues.iter_mut())
+                for ((in_port, out_port), queue) in node.in_ports()
+                    .iter()
+                    .zip(node.out_ports())
+                    .zip(queues.iter_mut())
                 {
                     let frame = {
                         let lock = node_ctx.lock(&[in_port.clone()], &[]);
-                        lock.wait(|lock| Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2))?;
+                        lock.wait(|lock| {
+                            Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2)
+                        })?;
                         lock.read_n::<Complex<T>>(in_port.id(), size / 2)?
                     };
                     queue.extend(vec![0.0; hop]);
-                    let mut input: Vec<_> =
-                        frame.iter().cloned().chain(iter::repeat(Complex::zero())).take(size).collect();
+                    let mut input: Vec<_> = frame
+                        .iter()
+                        .cloned()
+                        .chain(iter::repeat(Complex::zero()))
+                        .take(size)
+                        .collect();
                     fft.process(&mut input, &mut output);
                     for ((src, dst), window) in output.iter().zip(queue.iter_mut()).zip(&window) {
                         *dst += src.re * *window / size as T / (size / hop) as T * 2.0;
                     }
                     let samples = queue.drain(..hop).collect::<Vec<_>>();
-                    node_ctx.lock(&[], &[out_port.clone()]).write(out_port.id(), &samples)?;
+                    node_ctx
+                        .lock(&[], &[out_port.clone()])
+                        .write(out_port.id(), &samples)?;
                 }
                 Ok(())
             };
@@ -162,10 +198,9 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 }
 
 
-pub const SPECTROGRAM_RENDER: NodeDescriptor = NodeDescriptor {
-    name: "SpectrogramRender",
-    new: new_specrogram_render,
-};
+pub fn spectrogram_render() -> NodeDescriptor {
+    NodeDescriptor { name: "SpectrogramRender".into(), new: new_specrogram_render }
+}
 
 fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 1));
@@ -184,7 +219,9 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
             let frame = {
                 let lock = node_ctx.lock(&[node.in_port(InPortID(0))?], &[]);
                 lock.sleep();
-                lock.wait(|lock| Ok(lock.available::<Complex<T>>(InPortID(0))? >= size))?;
+                lock.wait(|lock| {
+                    Ok(lock.available::<Complex<T>>(InPortID(0))? >= size)
+                })?;
                 lock.read_n::<Complex<T>>(InPortID(0), size)?
             };
             let out: Vec<_> = (0..size)

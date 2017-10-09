@@ -5,10 +5,9 @@ use std::thread;
 use flow_synth::control::{NewNodeConfig, NodeDescriptor, RemoteControl};
 use std::sync::Arc;
 
-pub const AUDIO_IO: NodeDescriptor = NodeDescriptor {
-    name: "audio IO",
-    new: new,
-};
+pub fn audio_io() -> NodeDescriptor {
+    NodeDescriptor { name: "audio IO".into(), new: new }
+}
 
 fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let id = config.node.unwrap_or_else(|| ctx.graph().add_node(2, 2));
@@ -24,10 +23,18 @@ fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
         // create ports
         let inputs: Vec<_> = (0..n_inputs)
-            .map(|i| client.register_port(&format!("in-{}", i), AudioInSpec::default()).unwrap())
+            .map(|i| {
+                client
+                    .register_port(&format!("in-{}", i), AudioInSpec::default())
+                    .unwrap()
+            })
             .collect();
         let mut outputs: Vec<_> = (0..n_outputs)
-            .map(|i| client.register_port(&format!("out-{}", i), AudioOutSpec::default()).unwrap())
+            .map(|i| {
+                client
+                    .register_port(&format!("out-{}", i), AudioOutSpec::default())
+                    .unwrap()
+            })
             .collect();
 
         let unowned_inputs: Vec<_> = inputs.iter().map(|x| x.clone_unowned()).collect();
@@ -42,22 +49,29 @@ fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
                 let res: Result<()> = do catch {
                     // get port buffers
-                    let input_ports: Vec<_> =
-                        inputs.iter().map(|input| AudioInPort::new(input, ps)).collect();
-                    let mut output_ports: Vec<_> =
-                        outputs.iter_mut().map(|output| AudioOutPort::new(output, ps)).collect();
+                    let input_ports: Vec<_> = inputs
+                        .iter()
+                        .map(|input| AudioInPort::new(input, ps))
+                        .collect();
+                    let mut output_ports: Vec<_> = outputs
+                        .iter_mut()
+                        .map(|output| AudioOutPort::new(output, ps))
+                        .collect();
 
                     // shuffle data
-                    let lock = node_ctx.lock(&node_ctx.node().in_ports(), &node_ctx.node().out_ports());
+                    let lock =
+                        node_ctx.lock(&node_ctx.node().in_ports(), &node_ctx.node().out_ports());
                     for (input, out_port) in input_ports.into_iter().zip(lock.node().out_ports()) {
                         // discard errors, drop the frame
                         let _ = lock.write(out_port.id(), &input);
                     }
                     // to avoid xruns, don't block, just skip instead.
                     if lock.node().in_ports().iter().all(|in_port| {
-                        lock.available::<f32>(in_port.id()).unwrap_or(0) >= client.buffer_size() as usize
+                        lock.available::<f32>(in_port.id()).unwrap_or(0)
+                            >= client.buffer_size() as usize
                     }) {
-                        for (output, in_port) in output_ports.iter_mut().zip(lock.node().in_ports()) {
+                        for (output, in_port) in output_ports.iter_mut().zip(lock.node().in_ports())
+                        {
                             // discard errors, drop the frame
                             let _ = lock.read_n(in_port.id(), client.buffer_size() as usize)
                                 .map(|read| output.copy_from_slice(&read));
@@ -91,8 +105,10 @@ fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
         }
         // connect our inputs to the pulse sink
         let pulse_sink = active_client.ports(Some("PulseAudio"), None, port_flags::IS_OUTPUT);
-        for (pulse, ours) in
-            pulse_sink.iter().map(|name| active_client.port_by_name(name).unwrap()).zip(unowned_inputs.iter())
+        for (pulse, ours) in pulse_sink
+            .iter()
+            .map(|name| active_client.port_by_name(name).unwrap())
+            .zip(unowned_inputs.iter())
         {
             active_client.connect_ports(&pulse, ours).unwrap();
         }
