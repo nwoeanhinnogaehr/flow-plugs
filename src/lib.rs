@@ -1,4 +1,5 @@
 #![feature(catch_expr)]
+#![feature(core_intrinsics)]
 
 extern crate apodize;
 extern crate flow_synth;
@@ -8,9 +9,12 @@ extern crate palette;
 extern crate rustfft;
 extern crate sdl2;
 
+#[macro_use]
+mod macros;
 mod audio_io;
 mod stft;
 mod pixel_scroller;
+mod basics;
 
 use flow_synth::control::NodeDescriptor;
 
@@ -27,5 +31,7 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         stft::istft(),
         stft::spectrogram_render(),
         pixel_scroller::pixel_scroller(),
+        basics::splitter(),
+        basics::mixer::<f32>(),
     ]
 }

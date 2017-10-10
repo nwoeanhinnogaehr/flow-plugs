@@ -1,112 +1,137 @@
 use modular_flow::graph::*;
 use modular_flow::context::*;
+use flow_synth::control::*;
 use std::thread;
+use std::sync::Arc;
+use std::ops::AddAssign;
 
-pub fn run_map<F, T, U>(ctx: NodeContext, f: F)
-where
-    F: Fn(T) -> U + Send + 'static,
-    T: ByteConvertible,
-    U: ByteConvertible,
-{
-    thread::spawn(move || loop {
-        // TODO don't require flow on all channels
-        for (in_port, out_port) in ctx.node().in_ports().iter().zip(ctx.node().out_ports()) {
-            // get input
-            let lock = ctx.lock();
-            lock.wait(|lock| Ok(lock.available::<T>(in_port.id())? >= 1));
-            let mut data = lock.read::<T>(in_port.id()).unwrap();
-
-            // process
-            let out: Vec<U> = data.drain(..).map(|x| f(x)).collect();
-
-            // write output
-            lock.write(out_port.id(), &out).unwrap();
-        }
-    });
-}
-
-pub fn run_node_map<F, T, U>(ctx: NodeContext, f: F)
-where
-    F: Fn(&[T]) -> Vec<U> + Send + 'static,
-    T: ByteConvertible + Copy,
-    U: ByteConvertible,
-{
-    thread::spawn(move || loop {
-        // get input
-        let lock = ctx.lock();
-        for port in lock.node().in_ports().iter() {
-            lock.wait(|lock| Ok(lock.available::<T>(port.id())? >= 1));
-        }
-        let data: Vec<T> =
-            lock.node().in_ports().iter().map(|port| lock.read_n::<T>(port.id(), 1).unwrap()[0]).collect();
-
-        // process
-        let mut out: Vec<U> = f(&data);
-
-        // write output
-        for (out_data, out_port) in out.drain(..).zip(lock.node().out_ports()) {
-            lock.write(out_port.id(), &[out_data]).unwrap();
-        }
-    });
-}
-
-/**
- * A simple mapping from input to output ports. The given vector contains an element for each
- * output port, indicating the input port id to route from.
- */
-pub fn run_port_idx_map(ctx: NodeContext, map: Vec<usize>) {
-    assert_eq!(map.len(), ctx.node().out_ports().len());
-    assert!(*map.iter().max().unwrap() < ctx.node().in_ports().len());
-    thread::spawn(move || loop {
-        // get input
-        let lock = ctx.lock();
-        // TODO we can ignore inputs that are unused in the map
-        for port in lock.node().in_ports().iter() {
-            lock.wait(|lock| Ok(lock.available::<u8>(port.id())? >= 1));
-        }
-        let data: Vec<_> =
-            lock.node().in_ports().iter().map(|port| lock.read::<u8>(port.id()).unwrap()).collect();
-
-        // write output
-        for (dst, &src) in map.iter().enumerate() {
-            lock.write(OutPortID(dst), &data[src]).unwrap();
-        }
-    });
-}
-
-/**
- * Copies all data from input ports to corresponding output ports.
- * If there are more of one type of port than the other, the extras will be ignored.
- */
-pub fn run_identity(ctx: NodeContext) {
-    thread::spawn(move || loop {
-        let lock = ctx.lock();
-        for (in_data, out_port) in ctx.node()
-            .in_ports()
-            .iter()
-            .inspect(|port| lock.wait(|lock| Ok(lock.available::<u8>(port.id())? >= 1)).unwrap()) // TODO
-            .map(|port| lock.read::<u8>(port.id()).unwrap())
-            .zip(ctx.node().out_ports().iter())
-        {
-            lock.write(out_port.id(), &in_data).unwrap();
-        }
-    });
-}
-
-// i'm realizing now that this is really a half-assed delay line,
-// because it does very little delaying when the consumer is greedy
-pub fn run_delay<T: Default + Clone + ByteConvertible>(ctx: NodeContext, delay: usize) {
-    let nulls = vec![T::default(); delay];
-    for port in ctx.node().out_ports() {
-        ctx.lock().write::<T>(port.id(), &nulls).unwrap();
+pub fn splitter() -> NodeDescriptor {
+    NodeDescriptor {
+        name: "Splitter".into(),
+        new: run_splitter,
     }
-    run_identity(ctx);
 }
 
-// TODO LIST
-//
-// Mux/Demux
-// Interleave/Deinterleave
-// Fold/Split
-// Filter/Multimap
-// UnRLE (via Mutlimap?)
+pub fn run_splitter(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+    let node_id = cfg.node.unwrap_or_else(|| ctx.graph().add_node(1, 2));
+    let node = ctx.graph().node(node_id).unwrap();
+    let node_ctx = ctx.node_ctx(node_id).unwrap();
+    let remote_ctl = Arc::new(RemoteControl::new(
+        ctx,
+        node,
+        vec![
+            message::Desc {
+                name: "Add port".into(),
+                args: vec![],
+            },
+            message::Desc {
+                name: "Remove port".into(),
+                args: vec![],
+            },
+        ],
+    ));
+
+    let ctl = remote_ctl.clone();
+    thread::spawn(move || {
+        while !ctl.stopped() {
+            let res: Result<()> = do catch {
+                let lock = node_ctx.lock_all();
+                lock.sleep();
+                while let Some(msg) = ctl.recv_message() {
+                    match msg.desc.name.as_str() {
+                        "Add port" => {
+                            node_ctx.node().push_out_port();
+                        }
+                        "Remove port" => {
+                            node_ctx.node().pop_out_port(ctl.context().graph());
+                        }
+                        _ => panic!(),
+                    }
+                }
+                lock.wait(|lock| Ok(lock.available::<u8>(InPortID(0))? >= 1))?;
+                let data = lock.read::<u8>(InPortID(0))?;
+                ignore_nonfatal!({
+                    for port in lock.node().out_ports() {
+                        lock.write(port.id(), &data)?;
+                    }
+                });
+                Ok(())
+            };
+            if let Err(e) = res {
+                println!("splitter err {:?}", e);
+            }
+        }
+    });
+
+    remote_ctl
+}
+
+pub fn mixer<T: ByteConvertible + Default + Copy + AddAssign>() -> NodeDescriptor {
+    NodeDescriptor {
+        name: "Mixer::".to_string() + unsafe { ::std::intrinsics::type_name::<T>() },
+        new: run_mixer::<T>,
+    }
+}
+
+pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign>(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+    let node_id = cfg.node.unwrap_or_else(|| ctx.graph().add_node(2, 1));
+    let node = ctx.graph().node(node_id).unwrap();
+    let node_ctx = ctx.node_ctx(node_id).unwrap();
+    let remote_ctl = Arc::new(RemoteControl::new(
+        ctx,
+        node,
+        vec![
+            message::Desc {
+                name: "Add port".into(),
+                args: vec![],
+            },
+            message::Desc {
+                name: "Remove port".into(),
+                args: vec![],
+            },
+        ],
+    ));
+
+    let buffer_size = 1024;
+
+    let ctl = remote_ctl.clone();
+    thread::spawn(move || {
+        let mut accum = vec![T::default(); buffer_size];
+        while !ctl.stopped() {
+            let res: Result<()> = do catch {
+                let lock = node_ctx.lock_all();
+                lock.sleep();
+                while let Some(msg) = ctl.recv_message() {
+                    match msg.desc.name.as_str() {
+                        "Add port" => {
+                            node_ctx.node().push_in_port();
+                        }
+                        "Remove port" => {
+                            node_ctx.node().pop_in_port(ctl.context().graph());
+                        }
+                        _ => panic!(),
+                    }
+                }
+                for port in lock.node().in_ports() {
+                    ignore_nonfatal!({
+                        lock.wait(|lock| Ok(lock.available::<T>(port.id())? >= buffer_size))?;
+                        let data = lock.read_n::<T>(port.id(), buffer_size)?;
+                        for i in 0..buffer_size {
+                            accum[i] += data[i];
+                        }
+                    });
+                }
+                lock.write(OutPortID(0), &accum)?;
+                for i in 0..buffer_size {
+                    accum[i] = T::default();
+                }
+                Ok(())
+            };
+            if let Err(e) = res {
+                println!("mixer err {:?}", e);
+            }
+        }
+    });
+
+    remote_ctl
+}
