@@ -112,6 +112,7 @@ pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign>(ctx: Arc<Conte
                         _ => panic!(),
                     }
                 }
+                let mut read_any = false;
                 for port in lock.node().in_ports() {
                     ignore_nonfatal!({
                         lock.wait(|lock| Ok(lock.available::<T>(port.id())? >= buffer_size))?;
@@ -119,11 +120,14 @@ pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign>(ctx: Arc<Conte
                         for i in 0..buffer_size {
                             accum[i] += data[i];
                         }
+                        read_any = true;
                     });
                 }
-                lock.write(OutPortID(0), &accum)?;
-                for i in 0..buffer_size {
-                    accum[i] = T::default();
+                if read_any {
+                    lock.write(OutPortID(0), &accum)?;
+                    for i in 0..buffer_size {
+                        accum[i] = T::default();
+                    }
                 }
                 Ok(())
             };

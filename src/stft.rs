@@ -218,7 +218,6 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
         let res: Result<()> = do catch {
             let frame = {
                 let lock = node_ctx.lock(&[node.in_port(InPortID(0))?], &[]);
-                lock.sleep();
                 lock.wait(|lock| {
                     Ok(lock.available::<Complex<T>>(InPortID(0))? >= size)
                 })?;
