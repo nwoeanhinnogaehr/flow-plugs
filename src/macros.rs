@@ -6,7 +6,7 @@ macro_rules! ignore_nonfatal {
             Ok(())
         };
         match result {
-            Err(Error::Aborted) => result?,
+            Err(::modular_flow::graph::Error::Aborted) => result?,
             Err(_) => {},
             Ok(_) => {},
         }
