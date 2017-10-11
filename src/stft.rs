@@ -14,7 +14,10 @@ use std::sync::Arc;
 type T = f32; // fix this because generic numbers are so annoying
 
 pub fn stft() -> NodeDescriptor {
-    NodeDescriptor { name: "STFT".into(), new: new_stft }
+    NodeDescriptor {
+        name: "STFT".into(),
+        new: new_stft,
+    }
 }
 
 fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
@@ -107,7 +110,10 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 }
 
 pub fn istft() -> NodeDescriptor {
-    NodeDescriptor { name: "ISTFT".into(), new: new_istft }
+    NodeDescriptor {
+        name: "ISTFT".into(),
+        new: new_istft,
+    }
 }
 
 fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
@@ -199,7 +205,10 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
 
 pub fn spectrogram_render() -> NodeDescriptor {
-    NodeDescriptor { name: "SpectrogramRender".into(), new: new_specrogram_render }
+    NodeDescriptor {
+        name: "SpectrogramRender".into(),
+        new: new_specrogram_render,
+    }
 }
 
 fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {

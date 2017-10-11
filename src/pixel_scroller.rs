@@ -11,7 +11,10 @@ use std::mem;
 use std::sync::Arc;
 
 pub fn pixel_scroller() -> NodeDescriptor {
-    NodeDescriptor { name: "PixelScroller".into(), new: new_pixel_scroller }
+    NodeDescriptor {
+        name: "PixelScroller".into(),
+        new: new_pixel_scroller,
+    }
 }
 
 fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
