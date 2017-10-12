@@ -1,5 +1,6 @@
 #![feature(catch_expr)]
 #![feature(core_intrinsics)]
+#![feature(duration_from_micros)]
 
 extern crate apodize;
 extern crate flow_synth;
@@ -33,5 +34,8 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         pixel_scroller::pixel_scroller(),
         basics::splitter(),
         basics::mixer::<f32>(),
+        basics::clock(),
+        basics::debug::<usize>(),
+        basics::debug::<f32>(),
     ]
 }

@@ -69,6 +69,7 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
             let mut scroll_pos = 0;
 
             let lock = node_ctx.lock_all();
+            lock.sleep();
             let _ = lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width));
             let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
             if available_pixels >= width {

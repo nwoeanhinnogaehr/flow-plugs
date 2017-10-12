@@ -3,6 +3,9 @@ use modular_flow::context::*;
 use flow_synth::control::*;
 use std::sync::Arc;
 use std::ops::AddAssign;
+use std::thread;
+use std::time::{Duration, Instant};
+use std::fmt::Debug;
 use macros;
 
 pub fn splitter() -> NodeDescriptor {
@@ -69,7 +72,7 @@ pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign + Send + 'stati
     macros::simple_node(
         ctx,
         cfg,
-        (1, 2),
+        (2, 1),
         vec![
             message::Desc {
                 name: "Add port".into(),
@@ -114,4 +117,112 @@ pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign + Send + 'stati
             Ok(())
         },
     )
+}
+
+
+pub fn clock() -> NodeDescriptor {
+    NodeDescriptor {
+        name: "Clock".into(),
+        new: run_clock,
+    }
+}
+
+pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+    let freq_port = InPortID(0);
+    let bufsize_port = InPortID(1);
+    let ticker_port = OutPortID(0);
+    let mut buffer_size = 8;
+    let mut ticker_buffer: Vec<_> = (0..buffer_size).collect();
+    let mut period = 1000000; // 1 sec in us
+    let start_time = Instant::now();
+    let mut prev_quota = 0;
+    let mut spawned = false;
+    let ctl = macros::simple_node(
+        ctx,
+        cfg,
+        (2, 1),
+        vec![
+            message::Desc {
+                name: "Set bufsize".into(),
+                args: vec![message::ArgDesc {
+                    name: "".into(),
+                    ty: message::Type::Int
+                }],
+            },
+            message::Desc {
+                name: "Set freq".into(),
+                args: vec![message::ArgDesc {
+                    name: "".into(),
+                    ty: message::Type::Float
+                }],
+            },
+        ],
+        move |node_ctx, ctl| {
+            if !spawned {
+                let ctl = ctl.clone();
+                thread::spawn(move || {
+                    while !ctl.stopped() {
+                        thread::sleep(Duration::from_micros(period));
+                        ctl.node().notify();
+                    }
+                });
+                spawned = true;
+            }
+            let lock = node_ctx.lock_all();
+            lock.sleep();
+            if let Ok(Some(new_size)) = lock.read::<usize>(bufsize_port).map(|data| data.last().cloned()) {
+                buffer_size = new_size.min(1 << 20).max(1); // prevent OOM
+                ticker_buffer.resize(buffer_size, 0);
+                let tick0 = ticker_buffer[0];
+                for (idx, tick) in ticker_buffer.iter_mut().enumerate() {
+                    *tick = idx + tick0;
+                }
+            }
+            if let Ok(Some(new_freq)) = lock.read::<f32>(freq_port).map(|data| data.last().cloned()) {
+                period = (1.0 / new_freq.max(0.0000001)) as u64;
+            }
+            let quota = start_time.elapsed();
+            let quota = quota.as_secs() * 1000000 + quota.subsec_nanos() as u64 / 1000;
+            while prev_quota <= quota {
+                lock.write(ticker_port, &ticker_buffer)?;
+                for tick in &mut ticker_buffer {
+                    *tick += buffer_size;
+                }
+                prev_quota += period;
+            }
+            Ok(())
+        },
+    );
+    ctl.node().in_port(freq_port).unwrap().set_name("frequency");
+    ctl.node().in_port(bufsize_port).unwrap().set_name("bufsize");
+    ctl.node().out_port(ticker_port).unwrap().set_name("ticker");
+    ctl
+}
+
+
+pub fn debug<T: ByteConvertible + Debug>() -> NodeDescriptor {
+    NodeDescriptor {
+        name: "Debug::".to_string() + unsafe { ::std::intrinsics::type_name::<T>() },
+        new: run_debug::<T>,
+    }
+}
+
+pub fn run_debug<T: ByteConvertible + Debug>(
+    ctx: Arc<Context>,
+    cfg: NewNodeConfig,
+) -> Arc<RemoteControl> {
+    macros::simple_node(
+        ctx,
+        cfg,
+        (1, 0),
+        vec![],
+        move |node_ctx, _| {
+            let lock = node_ctx.lock_all();
+            lock.sleep();
+            lock.wait(|lock| Ok(lock.available::<T>(InPortID(0))? > 0))?;
+            eprintln!("DBG: {:?}", lock.read::<T>(InPortID(0))?);
+            Ok(())
+        },
+    )
+
 }
