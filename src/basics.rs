@@ -137,6 +137,19 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
     let start_time = Instant::now();
     let mut prev_quota = 0;
     let mut spawned = false;
+
+    let set_bufsize = |buffer_size: &mut usize, ticker_buffer: &mut Vec<usize>, new_size: usize| {
+        *buffer_size = new_size.min(1 << 20).max(1); // prevent OOM
+        ticker_buffer.resize(*buffer_size, 0);
+        let tick0 = ticker_buffer[0];
+        for (idx, tick) in ticker_buffer.iter_mut().enumerate() {
+            *tick = idx + tick0;
+        }
+    };
+    let set_freq = |period: &mut u64, new_freq: f32| {
+        *period = (1.0 / new_freq.max(0.0000001)) as u64;
+    };
+
     let ctl = macros::simple_node(
         ctx,
         cfg,
@@ -168,18 +181,28 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
                 });
                 spawned = true;
             }
+            while let Some(msg) = ctl.recv_message() {
+                match msg.desc.name.as_str() {
+                    "Set bufsize" => {
+                        if let message::Value::Int(new_size) = msg.args[0] {
+                            set_bufsize(&mut buffer_size, &mut ticker_buffer, new_size as usize);
+                        }
+                    }
+                    "Set freq" => {
+                        if let message::Value::Float(new_freq) = msg.args[0] {
+                            set_freq(&mut period, new_freq as f32);
+                        }
+                    }
+                    _ => panic!(),
+                }
+            }
             let lock = node_ctx.lock_all();
             lock.sleep();
             if let Ok(Some(new_size)) = lock.read::<usize>(bufsize_port).map(|data| data.last().cloned()) {
-                buffer_size = new_size.min(1 << 20).max(1); // prevent OOM
-                ticker_buffer.resize(buffer_size, 0);
-                let tick0 = ticker_buffer[0];
-                for (idx, tick) in ticker_buffer.iter_mut().enumerate() {
-                    *tick = idx + tick0;
-                }
+                set_bufsize(&mut buffer_size, &mut ticker_buffer, new_size);
             }
             if let Ok(Some(new_freq)) = lock.read::<f32>(freq_port).map(|data| data.last().cloned()) {
-                period = (1.0 / new_freq.max(0.0000001)) as u64;
+                set_freq(&mut period, new_freq);
             }
             let quota = start_time.elapsed();
             let quota = quota.as_secs() * 1000000 + quota.subsec_nanos() as u64 / 1000;
