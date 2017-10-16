@@ -6,10 +6,7 @@ use flow_synth::control::{NewNodeConfig, NodeDescriptor, RemoteControl};
 use std::sync::Arc;
 
 pub fn audio_io() -> NodeDescriptor {
-    NodeDescriptor {
-        name: "audio IO".into(),
-        new: new,
-    }
+    NodeDescriptor::new("audio IO", new)
 }
 
 fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
