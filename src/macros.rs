@@ -23,6 +23,9 @@ where
     let ctl = remote_ctl.clone();
     thread::spawn(move || while !ctl.stopped() {
         match loop_fn(&node_ctx, &ctl) {
+            Err(e) => {
+                println!("simple err {:?}", e);
+            }
             _ => {} // TODO
         }
     });

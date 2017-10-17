@@ -19,8 +19,8 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
     let remote_ctl = Arc::new(RemoteControl::new(ctx, node, vec![]));
-    let width = 2048;
-    let height = 1024;
+    let mut width = 1024;
+    let height = 1080;
 
     let ctl = remote_ctl.clone();
     thread::spawn(move || {
@@ -63,35 +63,47 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                 }
             }
 
-            let mut scroll_pos = 0;
-
             let lock = node_ctx.lock_all();
             lock.sleep();
+            match lock.read_n::<usize>(InPortID(0), 1) {
+                Ok(x) => {
+                    let size = x[0];
+                    if size > 8192 {
+                        eprintln!("pix scroller got size too large: {}", size);
+                        continue;
+                    }
+                    if size != width {
+                        width = size;
+                        texture = texture_creator
+                            .create_texture_streaming(PixelFormatEnum::RGBA8888, width as u32, height as u32 * 2)
+                            .unwrap();
+
+                    }
+                }
+                Err(_) => continue,
+            }
             let _ = lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width));
             let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
             if available_pixels >= width {
-                let frames = lock.read_n::<u32>(InPortID(0), available_pixels / width * width)
+                let frame = lock.read_n::<u32>(InPortID(0), width)
                     .unwrap();
                 drop(lock);
-
-                for frame in frames.chunks(width) {
-                    scroll_pos = time % (height as i32 / 2);
-                    texture
-                        .update(
-                            Rect::new(0, scroll_pos, width as u32, 1),
-                            unsafe { mem::transmute(&frame[..]) },
-                            width * 4,
+                let scroll_pos = time % (height as i32 / 2);
+                texture
+                    .update(
+                        Rect::new(0, scroll_pos, width as u32, 1),
+                        unsafe { mem::transmute(&frame[..]) },
+                        width * 4,
                         )
-                        .unwrap();
-                    texture
-                        .update(
-                            Rect::new(0, scroll_pos + height as i32 / 2, width as u32, 1),
-                            unsafe { mem::transmute(&frame[..]) },
-                            width * 4,
+                    .unwrap();
+                texture
+                    .update(
+                        Rect::new(0, scroll_pos + height as i32 / 2, width as u32, 1),
+                        unsafe { mem::transmute(&frame[..]) },
+                        width * 4,
                         )
-                        .unwrap();
-                    time += 1;
-                }
+                    .unwrap();
+                time += 1;
                 canvas
                     .copy(
                         &texture,

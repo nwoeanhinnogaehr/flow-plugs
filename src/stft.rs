@@ -17,14 +17,21 @@ pub fn stft() -> NodeDescriptor {
     NodeDescriptor::new("STFT", new_stft)
 }
 
+#[derive(Copy, Clone, Debug)]
+struct STFTHeader {
+    pub size: usize,
+    pub hop: usize,
+}
+unsafe impl TransmuteByteConvertible for STFTHeader {}
+
 fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 1));
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
 
-    // TODO add ports for params
-    let size = 4096;
+    let size = 2048;
     let hop = 256;
+    let max_buffered = size*8;
 
     let remote_ctl = Arc::new(RemoteControl::new(
         ctx,
@@ -69,7 +76,8 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                     _ => panic!(),
                 }
             }
-            node_ctx.lock_all().sleep(); // wait for next event
+            let lock = node_ctx.lock_all();
+            lock.sleep();
             let res: Result<()> = do catch {
                 for ((in_port, out_port), queue) in node_ctx
                     .node()
@@ -78,11 +86,8 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                     .zip(node_ctx.node().out_ports())
                     .zip(queues.iter_mut())
                 {
-                    {
-                        let lock = node_ctx.lock(&[in_port.clone()], &[]);
-                        lock.wait(|lock| Ok(lock.available::<T>(in_port.id())? >= hop))?;
-                        queue.extend(lock.read_n::<T>(in_port.id(), hop)?);
-                    }
+                    lock.wait(|lock| Ok(lock.available::<T>(in_port.id())? >= hop))?;
+                    queue.extend(lock.read_n::<T>(in_port.id(), hop)?);
 
                     for ((dst, src), mul) in input.iter_mut().zip(queue.iter()).zip(&window) {
                         dst.re = *src * mul;
@@ -91,10 +96,13 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                     queue.drain(..hop);
                     fft.process(&mut input, &mut output);
 
-                    {
-                        let lock = node_ctx.lock(&[], &[out_port.clone()]);
-                        lock.write(out_port.id(), &output[..output.len() / 2])?;
-                    }
+                    let header = STFTHeader {
+                        size: size / 2,
+                        hop
+                    };
+                    lock.write(out_port.id(), &[header])?;
+                    lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;
+                    lock.write(out_port.id(), &output[..output.len() / 2])?;
                 }
                 Ok(())
             };
@@ -128,9 +136,11 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             },
         ],
     ));
-    let size = 4096;
-    let hop = 256;
-    let window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+    let mut size = 4096;
+    let mut hop = 256;
+    let mut max_buffered = size*8;
+    let max_size = 1<<16;
+    let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     let ctl = remote_ctl.clone();
     thread::spawn(move || {
         let mut empty_q = VecDeque::<T>::new();
@@ -139,7 +149,7 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
         let mut output = vec![Complex::zero(); size];
 
         let mut planner = FFTplanner::new(true);
-        let fft = planner.plan_fft(size);
+        let mut fft = planner.plan_fft(size);
 
         while !ctl.stopped() {
             while let Some(msg) = ctl.recv_message() {
@@ -157,20 +167,36 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                     _ => panic!(),
                 }
             }
-            node_ctx.lock_all().sleep(); // wait for next event
+            let lock = node_ctx.lock_all();
+            lock.sleep(); // wait for next event
             let res: Result<()> = do catch {
-                for ((in_port, out_port), queue) in node.in_ports()
-                    .iter()
+                for ((idx, in_port), out_port) in node.in_ports()
+                    .iter().enumerate()
                     .zip(node.out_ports())
-                    .zip(queues.iter_mut())
                 {
                     let frame = {
-                        let lock = node_ctx.lock(&[in_port.clone()], &[]);
-                        lock.wait(|lock| {
-                            Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2)
-                        })?;
+                        lock.wait(|lock| Ok(lock.available::<STFTHeader>(in_port.id())? >= 1))?;
+                        let header = lock.read_n::<STFTHeader>(in_port.id(), 1)?[0];
+                        if header.size > max_size || header.hop > max_size {
+                            eprintln!("istft got header too large {:?}", header);
+                            continue;
+                        }
+                        if header.hop != hop || header.size * 2 != size {
+                            println!("istft size change {:?}", header);
+                            hop = header.hop;
+                            size = header.size * 2;
+                            max_buffered = size * 8;
+                            empty_q = VecDeque::<T>::new();
+                            empty_q.extend(vec![0.0; size - hop]);
+                            queues = vec![empty_q.clone(); node.in_ports().len()];
+                            fft = planner.plan_fft(size);
+                            output.resize(size, Complex::zero());
+                            window = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+                        }
+                        lock.wait(|lock| Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2))?;
                         lock.read_n::<Complex<T>>(in_port.id(), size / 2)?
                     };
+                    let queue = &mut queues[idx];
                     queue.extend(vec![0.0; hop]);
                     let mut input: Vec<_> = frame
                         .iter()
@@ -180,12 +206,12 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                         .collect();
                     fft.process(&mut input, &mut output);
                     for ((src, dst), window) in output.iter().zip(queue.iter_mut()).zip(&window) {
+                        // lol what is this some kind of normalization heuristic?!
                         *dst += src.re * *window / size as T / (size / hop) as T * 2.0;
                     }
                     let samples = queue.drain(..hop).collect::<Vec<_>>();
-                    node_ctx
-                        .lock(&[], &[out_port.clone()])
-                        .write(out_port.id(), &samples)?;
+                    lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;
+                    lock.write(out_port.id(), &samples)?;
                 }
                 Ok(())
             };
@@ -207,7 +233,7 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
     let remote_ctl = Arc::new(RemoteControl::new(ctx, node.clone(), vec![]));
-    let size = 2048;
+    let mut size = 2048;
     use palette::*;
     use palette::pixel::*;
 
@@ -216,9 +242,21 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
     let ctl = remote_ctl.clone();
     thread::spawn(move || while !ctl.stopped() {
         let res: Result<()> = do catch {
+            let lock = node_ctx.lock_all();
+            lock.sleep();
             let frame = {
-                let lock = node_ctx.lock(&[node.in_port(InPortID(0))?], &[]);
-                lock.sleep();
+                lock.wait(|lock| Ok(lock.available::<STFTHeader>(InPortID(0))? >= 1))?;
+                let header = lock.read_n::<STFTHeader>(InPortID(0), 1)?[0];
+                if size != header.size {
+                    if header.size >= 8192 {
+                        println!("render got header too large {:?}", header);
+                        continue;
+                    }
+                    println!("render size change {:?}", header);
+                    size = header.size;
+                    prev_frame.resize(size, Complex::<T>::zero());
+                    max = 1.0;
+                }
                 lock.wait(|lock| {
                     Ok(lock.available::<Complex<T>>(InPortID(0))? >= size)
                 })?;
@@ -252,10 +290,8 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
                 })
                 .collect();
             prev_frame = frame;
-            {
-                let lock = node_ctx.lock(&[], &[node.out_port(OutPortID(0))?]);
-                lock.write(OutPortID(0), &out)?;
-            }
+            lock.write(OutPortID(0), &[size])?;
+            lock.write(OutPortID(0), &out)?;
             Ok(())
         };
         if let Err(e) = res {
