@@ -1,8 +1,8 @@
 use modular_flow::graph::*;
 use modular_flow::context::*;
 use flow_synth::control::*;
+use flow_synth::macros;
 use std::sync::Arc;
-use macros;
 use std::f64;
 
 trait Osc {

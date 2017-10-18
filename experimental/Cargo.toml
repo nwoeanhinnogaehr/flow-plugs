@@ -1,0 +1,13 @@
+[package]
+name = "flow-plug-experimental"
+version = "0.1.0"
+authors = ["Noah Weninger <nweninge@ualberta.ca>"]
+
+[dependencies]
+modular-flow = { path = "../../modular-flow" }
+flow-synth = { path = "../../flow-synth" }
+rustfft = "*"
+
+[lib]
+name = "flow_plug_experimental"
+crate-type = ["dylib"]

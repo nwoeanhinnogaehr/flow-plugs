@@ -31,7 +31,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
     let size = 2048;
     let hop = 256;
-    let max_buffered = size*8;
+    let max_buffered = size * 8;
 
     let remote_ctl = Arc::new(RemoteControl::new(
         ctx,
@@ -98,7 +98,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
 
                     let header = STFTHeader {
                         size: size / 2,
-                        hop
+                        hop,
                     };
                     lock.write(out_port.id(), &[header])?;
                     lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;
@@ -138,8 +138,8 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     ));
     let mut size = 4096;
     let mut hop = 256;
-    let mut max_buffered = size*8;
-    let max_size = 1<<16;
+    let mut max_buffered = size * 8;
+    let max_size = 1 << 16;
     let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     let ctl = remote_ctl.clone();
     thread::spawn(move || {
@@ -170,9 +170,8 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             let lock = node_ctx.lock_all();
             lock.sleep(); // wait for next event
             let res: Result<()> = do catch {
-                for ((idx, in_port), out_port) in node.in_ports()
-                    .iter().enumerate()
-                    .zip(node.out_ports())
+                for ((idx, in_port), out_port) in
+                    node.in_ports().iter().enumerate().zip(node.out_ports())
                 {
                     let frame = {
                         lock.wait(|lock| Ok(lock.available::<STFTHeader>(in_port.id())? >= 1))?;
@@ -193,7 +192,9 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                             output.resize(size, Complex::zero());
                             window = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
                         }
-                        lock.wait(|lock| Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2))?;
+                        lock.wait(|lock| {
+                            Ok(lock.available::<Complex<T>>(in_port.id())? >= size / 2)
+                        })?;
                         lock.read_n::<Complex<T>>(in_port.id(), size / 2)?
                     };
                     let queue = &mut queues[idx];

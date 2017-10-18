@@ -75,9 +75,12 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                     if size != width {
                         width = size;
                         texture = texture_creator
-                            .create_texture_streaming(PixelFormatEnum::RGBA8888, width as u32, height as u32 * 2)
+                            .create_texture_streaming(
+                                PixelFormatEnum::RGBA8888,
+                                width as u32,
+                                height as u32 * 2,
+                            )
                             .unwrap();
-
                     }
                 }
                 Err(_) => continue,
@@ -85,8 +88,7 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
             let _ = lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width));
             let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
             if available_pixels >= width {
-                let frame = lock.read_n::<u32>(InPortID(0), width)
-                    .unwrap();
+                let frame = lock.read_n::<u32>(InPortID(0), width).unwrap();
                 drop(lock);
                 let scroll_pos = time % (height as i32 / 2);
                 texture
@@ -94,14 +96,14 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                         Rect::new(0, scroll_pos, width as u32, 1),
                         unsafe { mem::transmute(&frame[..]) },
                         width * 4,
-                        )
+                    )
                     .unwrap();
                 texture
                     .update(
                         Rect::new(0, scroll_pos + height as i32 / 2, width as u32, 1),
                         unsafe { mem::transmute(&frame[..]) },
                         width * 4,
-                        )
+                    )
                     .unwrap();
                 time += 1;
                 canvas

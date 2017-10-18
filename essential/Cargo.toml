@@ -1,11 +1,11 @@
 [package]
-name = "flow-plugs"
+name = "flow-plug-essential"
 version = "0.1.0"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 
 [dependencies]
-modular-flow = { path = "../modular-flow" }
-flow-synth = { path = "../flow-synth" }
+modular-flow = { path = "../../modular-flow" }
+flow-synth = { path = "../../flow-synth" }
 jack = "*"
 sdl2 = "*"
 rustfft = "*"
@@ -13,5 +13,5 @@ palette = "*"
 apodize = "*"
 
 [lib]
-name = "flow_plugs"
+name = "flow_plug_essential"
 crate-type = ["dylib"]

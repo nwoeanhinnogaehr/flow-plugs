@@ -1,12 +1,12 @@
 use modular_flow::graph::*;
 use modular_flow::context::*;
 use flow_synth::control::*;
+use flow_synth::macros;
 use std::sync::Arc;
 use std::ops::AddAssign;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::fmt::Debug;
-use macros;
 
 pub fn splitter() -> NodeDescriptor {
     NodeDescriptor::new("Splitter", run_splitter)
