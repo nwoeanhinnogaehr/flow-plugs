@@ -20,7 +20,7 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
     let node = ctx.graph().node(id).unwrap();
     let remote_ctl = Arc::new(RemoteControl::new(ctx, node, vec![]));
     let mut width = 1024;
-    let height = 1080;
+    let mut height = 1024;
 
     let ctl = remote_ctl.clone();
     thread::spawn(move || {
@@ -54,17 +54,23 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                         ..
                     } => break 'mainloop,
                     Event::Window {
-                        win_event: WindowEvent::Resized(_, _),
+                        win_event: WindowEvent::Resized(_, h),
                         ..
                     } => {
-                        // TODO
+                        height = h;
+                        texture = texture_creator
+                            .create_texture_streaming(
+                                PixelFormatEnum::RGBA8888,
+                                width as u32,
+                                height as u32 * 2,
+                            )
+                            .unwrap();
                     }
                     _ => {}
                 }
             }
 
             let lock = node_ctx.lock_all();
-            lock.sleep();
             match lock.read_n::<usize>(InPortID(0), 1) {
                 Ok(x) => {
                     let size = x[0];
@@ -83,38 +89,43 @@ fn new_pixel_scroller(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteCon
                             .unwrap();
                     }
                 }
-                Err(_) => continue,
+                Err(_) => {
+                    lock.sleep();
+                    continue;
+                }
             }
-            let _ = lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width));
-            let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
-            if available_pixels >= width {
-                let frame = lock.read_n::<u32>(InPortID(0), width).unwrap();
-                drop(lock);
-                let scroll_pos = time % (height as i32 / 2);
-                texture
-                    .update(
-                        Rect::new(0, scroll_pos, width as u32, 1),
-                        unsafe { mem::transmute(&frame[..]) },
-                        width * 4,
-                    )
-                    .unwrap();
-                texture
-                    .update(
-                        Rect::new(0, scroll_pos + height as i32 / 2, width as u32, 1),
-                        unsafe { mem::transmute(&frame[..]) },
-                        width * 4,
-                    )
-                    .unwrap();
-                time += 1;
-                canvas
-                    .copy(
-                        &texture,
-                        Some(Rect::new(0, scroll_pos, width as u32, height as u32 / 2)),
-                        None,
-                    )
-                    .unwrap();
-                canvas.present();
-            }
+            let res: Result<_> = do catch {
+                lock.wait(|lock| Ok(lock.available::<u32>(InPortID(0))? >= width))?;
+                let available_pixels = lock.available::<u32>(InPortID(0)).unwrap_or(0);
+                if available_pixels >= width {
+                    let frame = lock.read_n::<u32>(InPortID(0), width)?;
+                    let scroll_pos = time % (height as i32 / 2);
+                    texture
+                        .update(
+                            Rect::new(0, scroll_pos, width as u32, 1),
+                            unsafe { mem::transmute(&frame[..]) },
+                            width * 4,
+                        )
+                        .unwrap();
+                    texture
+                        .update(
+                            Rect::new(0, scroll_pos + height as i32 / 2, width as u32, 1),
+                            unsafe { mem::transmute(&frame[..]) },
+                            width * 4,
+                        )
+                        .unwrap();
+                    time += 1;
+                    canvas
+                        .copy(
+                            &texture,
+                            Some(Rect::new(0, scroll_pos, width as u32, height as u32 / 2)),
+                            None,
+                        )
+                        .unwrap();
+                    canvas.present();
+                }
+                Ok(())
+            };
         }
     });
     remote_ctl

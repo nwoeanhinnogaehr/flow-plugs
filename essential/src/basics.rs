@@ -41,7 +41,6 @@ pub fn run_splitter(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl>
                     _ => panic!(),
                 }
             }
-            lock.sleep();
             let data = lock.read::<u8>(InPortID(0))?;
             if data.len() > 0 {
                 for port in lock.node().out_ports() {
@@ -85,7 +84,6 @@ pub fn run_mixer<T: ByteConvertible + Default + Copy + AddAssign + Send + 'stati
         ],
         move |node_ctx, ctl| {
             let lock = node_ctx.lock_all();
-            lock.sleep();
             while let Some(msg) = ctl.recv_message() {
                 match msg.desc.name.as_str() {
                     "Add port" => {
@@ -176,7 +174,7 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
                 let ctl = ctl.clone();
                 thread::spawn(move || while !ctl.stopped() {
                     thread::sleep(Duration::from_micros(period));
-                    ctl.node().notify();
+                    ctl.node().notify(ctl.context().graph());
                 });
                 spawned = true;
             }
@@ -192,7 +190,6 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
                 }
             }
             let lock = node_ctx.lock_all();
-            lock.sleep();
             if let Ok(Some(new_size)) = lock.read::<usize>(bufsize_port)
                 .map(|data| data.last().cloned())
             {
@@ -237,7 +234,6 @@ pub fn run_debug<T: ByteConvertible + Debug>(
 ) -> Arc<RemoteControl> {
     macros::simple_node(ctx, cfg, (1, 0), vec![], move |node_ctx, _| {
         let lock = node_ctx.lock_all();
-        lock.sleep();
         lock.wait(|lock| Ok(lock.available::<T>(InPortID(0))? > 0))?;
         eprintln!("DBG: {:?}", lock.read::<T>(InPortID(0))?);
         Ok(())

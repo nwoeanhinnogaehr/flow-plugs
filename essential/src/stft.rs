@@ -29,8 +29,8 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
 
-    let size = 2048;
-    let hop = 256;
+    let size = 4096;
+    let hop = 128;
     let max_buffered = size * 8;
 
     let remote_ctl = Arc::new(RemoteControl::new(
@@ -77,7 +77,6 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                 }
             }
             let lock = node_ctx.lock_all();
-            lock.sleep();
             let res: Result<()> = do catch {
                 for ((in_port, out_port), queue) in node_ctx
                     .node()
@@ -168,7 +167,6 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                 }
             }
             let lock = node_ctx.lock_all();
-            lock.sleep(); // wait for next event
             let res: Result<()> = do catch {
                 for ((idx, in_port), out_port) in
                     node.in_ports().iter().enumerate().zip(node.out_ports())
@@ -244,7 +242,6 @@ fn new_specrogram_render(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<Remote
     thread::spawn(move || while !ctl.stopped() {
         let res: Result<()> = do catch {
             let lock = node_ctx.lock_all();
-            lock.sleep();
             let frame = {
                 lock.wait(|lock| Ok(lock.available::<STFTHeader>(InPortID(0))? >= 1))?;
                 let header = lock.read_n::<STFTHeader>(InPortID(0), 1)?[0];
