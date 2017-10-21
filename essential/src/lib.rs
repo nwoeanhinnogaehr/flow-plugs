@@ -17,7 +17,7 @@ mod pixel_scroller;
 mod basics;
 mod synth;
 
-use flow_synth::control::NodeDescriptor;
+use flow_synth::control::{NodeDescriptor, message};
 
 #[no_mangle]
 pub fn get_name() -> String {
@@ -37,6 +37,8 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         basics::clock(),
         basics::debug::<usize>(),
         basics::debug::<f32>(),
+        basics::constant(message::Type::Float),
+        basics::constant(message::Type::Usize),
         synth::square(),
         synth::saw(),
         synth::sin(),

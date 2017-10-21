@@ -239,3 +239,48 @@ pub fn run_debug<T: ByteConvertible + Debug>(
         Ok(())
     })
 }
+
+pub fn constant(ty: message::Type) -> NodeDescriptor {
+    NodeDescriptor::new(
+        format!("Const::{:?}", ty),
+        move |ctx: Arc<Context>, cfg: NewNodeConfig| run_constant(ctx, cfg, ty.clone()),
+    )
+}
+
+pub fn run_constant(
+    ctx: Arc<Context>,
+    cfg: NewNodeConfig,
+    ty: message::Type,
+) -> Arc<RemoteControl> {
+    macros::simple_node(ctx, cfg, (0, 1), vec![
+            message::Desc {
+                name: "Set".into(),
+                args: vec![
+                    message::ArgDesc {
+                        name: "value".into(),
+                        ty: ty,
+                    }
+                ],
+            },
+    ], move |node_ctx, ctl| {
+        let lock = node_ctx.lock_all();
+        while let Some(msg) = ctl.recv_message() {
+            match msg.desc.name.as_str() {
+                "Set" => {
+                    match msg.args[0] {
+                        message::Value::Usize(x) => {
+                            lock.write(OutPortID(0), &[x])?;
+                        }
+                        message::Value::Float(x) => {
+                            lock.write(OutPortID(0), &[x])?;
+                        }
+                        _ => panic!(),
+                    }
+                }
+                _ => panic!(),
+            }
+        }
+        lock.sleep();
+        Ok(())
+    })
+}

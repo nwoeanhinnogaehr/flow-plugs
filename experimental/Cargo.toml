@@ -6,7 +6,6 @@ authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 [dependencies]
 modular-flow = { path = "../../modular-flow" }
 flow-synth = { path = "../../flow-synth" }
-flow-plug-essential = { path = "../essential" }
 rustfft = "*"
 
 [lib]

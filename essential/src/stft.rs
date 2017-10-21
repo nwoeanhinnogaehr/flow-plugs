@@ -25,12 +25,14 @@ struct STFTHeader {
 unsafe impl TransmuteByteConvertible for STFTHeader {}
 
 fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
-    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(1, 1));
+    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(3, 1));
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
+    node.in_port(InPortID(0)).unwrap().set_name("size");
+    node.in_port(InPortID(1)).unwrap().set_name("hop");
 
-    let size = 4096;
-    let hop = 128;
+    let mut size = 1024;
+    let mut hop = 256;
     let max_buffered = size * 8;
 
     let remote_ctl = Arc::new(RemoteControl::new(
@@ -49,7 +51,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     ));
 
     let ctl = remote_ctl.clone();
-    let window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+    let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     thread::spawn(move || {
         let mut empty_q = VecDeque::<T>::new();
         empty_q.extend(vec![0.0; size - hop]);
@@ -58,7 +60,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
         let mut output = vec![Complex::zero(); size];
 
         let mut planner = FFTplanner::new(false);
-        let fft = planner.plan_fft(size);
+        let mut fft = planner.plan_fft(size);
 
         while !ctl.stopped() {
             while let Some(msg) = ctl.recv_message() {
@@ -69,18 +71,38 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                         queues.push(empty_q.clone());
                     }
                     "Remove port" => {
-                        node_ctx.node().pop_in_port(ctl.context().graph());
-                        node_ctx.node().pop_out_port(ctl.context().graph());
-                        queues.pop();
+                        if node_ctx.node().in_ports().len() > 3 {
+                            node_ctx.node().pop_in_port(ctl.context().graph());
+                            node_ctx.node().pop_out_port(ctl.context().graph());
+                            queues.pop();
+                        }
                     }
                     _ => panic!(),
                 }
             }
             let lock = node_ctx.lock_all();
+            if let Ok(new_size) = lock.read_n::<usize>(InPortID(0), 1).map(|data| data[0]) {
+                size = new_size.max(1).min(1<<20);
+                println!("Stft resize {} by {}", size, hop);
+                fft = planner.plan_fft(size);
+                input.resize(size, Complex::zero());
+                output.resize(size, Complex::zero());
+                empty_q = VecDeque::<T>::new();
+                empty_q.extend(vec![0.0; size - hop]);
+                queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
+                window = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+            }
+            if let Ok(new_hop) = lock.read_n::<usize>(InPortID(1), 1).map(|data| data[0]) {
+                hop = new_hop.max(1).min(size);
+                println!("Stft resize {} by {}", size, hop);
+                empty_q = VecDeque::<T>::new();
+                empty_q.extend(vec![0.0; size - hop]);
+                queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
+            }
             let res: Result<()> = do catch {
                 for ((in_port, out_port), queue) in node_ctx
                     .node()
-                    .in_ports()
+                    .in_ports()[2..]
                     .iter()
                     .zip(node_ctx.node().out_ports())
                     .zip(queues.iter_mut())
