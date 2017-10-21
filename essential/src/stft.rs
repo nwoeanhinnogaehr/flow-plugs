@@ -82,22 +82,21 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             }
             let lock = node_ctx.lock_all();
             if let Ok(new_size) = lock.read_n::<usize>(InPortID(0), 1).map(|data| data[0]) {
-                size = new_size.max(1).min(1<<20);
+                size = (new_size & !1).max(1).min(1<<20);
+                hop = hop.min(size);
                 println!("Stft resize {} by {}", size, hop);
                 fft = planner.plan_fft(size);
                 input.resize(size, Complex::zero());
                 output.resize(size, Complex::zero());
-                empty_q = VecDeque::<T>::new();
-                empty_q.extend(vec![0.0; size - hop]);
-                queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
+                empty_q.resize(size - hop, 0.0);
+                queues.iter_mut().for_each(|q| q.resize(size - hop, 0.0));
                 window = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
             }
             if let Ok(new_hop) = lock.read_n::<usize>(InPortID(1), 1).map(|data| data[0]) {
                 hop = new_hop.max(1).min(size);
                 println!("Stft resize {} by {}", size, hop);
-                empty_q = VecDeque::<T>::new();
-                empty_q.extend(vec![0.0; size - hop]);
-                queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
+                empty_q.resize(size - hop, 0.0);
+                queues.iter_mut().for_each(|q| q.resize(size - hop, 0.0));
             }
             let res: Result<()> = do catch {
                 for ((in_port, out_port), queue) in node_ctx
