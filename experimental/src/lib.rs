@@ -24,6 +24,11 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let x = t as f32;
             (x / (1.0 + x % (1 + (t >> 9 | t >> 13)) as f32) / 64.0).sin()
         }),
+        bytebeat::beat("asketch2", |t| {
+            let x = t as f32;
+            let z = (1 + (t >> 9 | t >> 13)) as f32;
+            (x / (1.0 + (x % z - z / 2.0).abs()) / 256.0).sin()
+        }),
         bytebeat::beat("ksketch", |t| {
             let x = t as f32;
             let s = x / (1.0 + x % (1 + (t >> 5 | t >> 7)) as f32);
@@ -37,6 +42,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let s = t & t >> 5 | t >> 7;
             (1 << (s * s / 666) % 16) as f32 % 22050.0
         }),
-        specfx::hold(),
+        specfx::const_phase_mul(),
     ]
 }

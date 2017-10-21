@@ -155,7 +155,7 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
                 args: vec![
                     message::ArgDesc {
                         name: "".into(),
-                        ty: message::Type::Int,
+                        ty: message::Type::Usize,
                     },
                 ],
             },
@@ -164,7 +164,7 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
                 args: vec![
                     message::ArgDesc {
                         name: "".into(),
-                        ty: message::Type::Float,
+                        ty: message::Type::F32,
                     },
                 ],
             },
@@ -180,11 +180,11 @@ pub fn run_clock(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
             }
             while let Some(msg) = ctl.recv_message() {
                 match msg.desc.name.as_str() {
-                    "Set bufsize" => if let message::Value::Int(new_size) = msg.args[0] {
-                        set_bufsize(&mut buffer_size, &mut ticker_buffer, new_size as usize);
+                    "Set bufsize" => if let message::Value::Usize(new_size) = msg.args[0] {
+                        set_bufsize(&mut buffer_size, &mut ticker_buffer, new_size);
                     },
-                    "Set freq" => if let message::Value::Float(new_freq) = msg.args[0] {
-                        set_freq(&mut period, new_freq as f32);
+                    "Set freq" => if let message::Value::F32(new_freq) = msg.args[0] {
+                        set_freq(&mut period, new_freq);
                     },
                     _ => panic!(),
                 }
@@ -271,7 +271,7 @@ pub fn run_constant(
                         message::Value::Usize(x) => {
                             lock.write(OutPortID(0), &[x])?;
                         }
-                        message::Value::Float(x) => {
+                        message::Value::F32(x) => {
                             lock.write(OutPortID(0), &[x])?;
                         }
                         _ => panic!(),
