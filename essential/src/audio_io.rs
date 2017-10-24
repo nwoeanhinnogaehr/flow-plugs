@@ -1,4 +1,4 @@
-use modular_flow::graph::Result;
+use modular_flow::graph::{Result, OutPortID};
 use modular_flow::context::*;
 use jack::prelude::*;
 use std::thread;
@@ -10,9 +10,10 @@ pub fn audio_io() -> NodeDescriptor {
 }
 
 fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
-    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(2, 2));
+    let id = config.node.unwrap_or_else(|| ctx.graph().add_node(2, 3));
     let node_ctx = ctx.node_ctx(id).unwrap();
     let node = ctx.graph().node(id).unwrap();
+    node.out_port(OutPortID(2)).unwrap().set_name("req");
     let remote_ctl = Arc::new(RemoteControl::new(ctx, node, Vec::new()));
     let ctl = remote_ctl.clone();
     let n_inputs = node_ctx.node().in_ports().len();
@@ -59,8 +60,11 @@ fn new(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                         .collect();
 
                     // shuffle data
-                    let lock =
-                        node_ctx.lock(&node_ctx.node().in_ports(), &node_ctx.node().out_ports());
+                    let lock = node_ctx.lock_all();
+                    ignore_nonfatal!({
+                        lock.write(OutPortID(2), &[client.buffer_size() as usize])?;
+                    });
+
                     for (input, out_port) in input_ports.into_iter().zip(lock.node().out_ports()) {
                         // discard errors, drop the frame
                         ignore_nonfatal!({

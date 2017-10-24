@@ -31,8 +31,6 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     node.in_port(InPortID(0)).unwrap().set_name("size");
     node.in_port(InPortID(1)).unwrap().set_name("hop");
 
-    let max_buffered = 1<<16;
-
     let remote_ctl = Arc::new(RemoteControl::new(
         ctx,
         node,
@@ -131,7 +129,6 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                         hop: md.hop,
                     };
                     lock.write(out_port.id(), &[header])?;
-                    lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;
                     lock.write(out_port.id(), &output[..output.len() / 2])?;
                 }
                 Ok(())
@@ -168,7 +165,6 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     ));
     let mut size = 4096;
     let mut hop = 256;
-    let mut max_buffered = size * 8;
     let max_size = 1 << 16;
     let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     let ctl = remote_ctl.clone();
@@ -213,7 +209,6 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                             println!("istft size change {:?}", header);
                             hop = header.hop;
                             size = header.size * 2;
-                            max_buffered = size * 8;
                             empty_q = VecDeque::<T>::new();
                             empty_q.extend(vec![0.0; size - hop]);
                             queues = vec![empty_q.clone(); node.in_ports().len()];
@@ -240,7 +235,6 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                         *dst += src.re * *window / size as T / (size / hop) as T * 2.0;
                     }
                     let samples = queue.drain(..hop).collect::<Vec<_>>();
-                    lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;
                     lock.write(out_port.id(), &samples)?;
                 }
                 Ok(())

@@ -12,15 +12,13 @@ pub fn beat(name: &str, f: fn(usize) -> f32) -> NodeDescriptor {
 }
 
 fn run_beat(f: fn(usize) -> f32, ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
-    let buffer_size = 1024;
-    let max_buffered = 65536;
     let mut t = 0;
-    let mut buffer = vec![0.0f32; buffer_size];
-    macros::simple_node(ctx, cfg, (0, 1), vec![], move |node_ctx, _| {
+    let mut buffer = vec![];
+    macros::simple_node(ctx, cfg, (1, 1), vec![], move |node_ctx, _| {
         let lock = node_ctx.lock_all();
-        lock.wait(|lock| {
-            Ok(lock.buffered::<f32>(OutPortID(0))? < max_buffered)
-        })?;
+        lock.wait(|lock| Ok(lock.available::<usize>(InPortID(0))? >= 1))?;
+        let req_size = lock.read_n::<usize>(InPortID(0), 1)?[0];
+        buffer.resize(req_size, 0f32);
         for x in &mut buffer {
             *x = f(t);
             t += 1;

@@ -13,7 +13,6 @@ pub fn splitter() -> NodeDescriptor {
 }
 
 pub fn run_splitter(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
-    let max_buffered = 65536;
     macros::simple_node(
         ctx,
         cfg,
@@ -41,11 +40,11 @@ pub fn run_splitter(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl>
                     _ => panic!(),
                 }
             }
+            lock.wait(|lock| Ok(lock.available::<u8>(InPortID(0))? >= 1))?;
             let data = lock.read::<u8>(InPortID(0))?;
             if data.len() > 0 {
                 for port in lock.node().out_ports() {
                     ignore_nonfatal!({
-                        lock.wait(|lock| Ok(lock.buffered::<u8>(port.id())? <= max_buffered))?;
                         lock.write(port.id(), &data)?;
                     });
                 }

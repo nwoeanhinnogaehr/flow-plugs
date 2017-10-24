@@ -27,7 +27,6 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<
     num_aux_out: usize,
     mut process: ProcessFn,
 ) -> Arc<RemoteControl> {
-    let max_buffered = 1<<16;
     let mut size = 0;
     let ctl = macros::simple_node(
         ctx,
@@ -84,7 +83,6 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<
                 process(ctl, &lock, header.hop, &mut frame);
 
                 lock.write(out_port.id(), &[header])?;
-                lock.wait(|lock| Ok(lock.buffered::<f32>(out_port.id())? < max_buffered))?;
                 lock.write(out_port.id(), &frame)?;
             }
             Ok(())
