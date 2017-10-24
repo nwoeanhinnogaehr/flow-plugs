@@ -11,6 +11,8 @@ sdl2 = "*"
 rustfft = "*"
 palette = "*"
 apodize = "*"
+serde_derive = "*"
+serde = "*"
 
 [lib]
 name = "flow_plug_essential"

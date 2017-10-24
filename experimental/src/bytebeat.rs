@@ -13,7 +13,7 @@ pub fn beat(name: &str, f: fn(usize) -> f32) -> NodeDescriptor {
 
 fn run_beat(f: fn(usize) -> f32, ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
     let buffer_size = 1024;
-    let max_buffered = 4096;
+    let max_buffered = 65536;
     let mut t = 0;
     let mut buffer = vec![0.0f32; buffer_size];
     macros::simple_node(ctx, cfg, (0, 1), vec![], move |node_ctx, _| {

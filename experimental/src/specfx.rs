@@ -20,13 +20,14 @@ const MAX_SIZE: usize = 1 << 28;
 // buf resize fn
 // num aux in
 //
-fn new_stftfx<ProcessFn: FnMut(&NodeGuard, usize, &mut [Complex<f32>]) + Send + 'static>(
+fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<f32>]) + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
     num_aux_in: usize,
     num_aux_out: usize,
     mut process: ProcessFn,
 ) -> Arc<RemoteControl> {
+    let max_buffered = 1<<16;
     let mut size = 0;
     let ctl = macros::simple_node(
         ctx,
@@ -80,9 +81,10 @@ fn new_stftfx<ProcessFn: FnMut(&NodeGuard, usize, &mut [Complex<f32>]) + Send + 
                 })?;
                 let mut frame = lock.read_n::<Complex<f32>>(in_port.id(), size)?;
 
-                process(&lock, header.hop, &mut frame);
+                process(ctl, &lock, header.hop, &mut frame);
 
                 lock.write(out_port.id(), &[header])?;
+                lock.wait(|lock| Ok(lock.buffered::<f32>(out_port.id())? < max_buffered))?;
                 lock.write(out_port.id(), &frame)?;
             }
             Ok(())
@@ -92,11 +94,17 @@ fn new_stftfx<ProcessFn: FnMut(&NodeGuard, usize, &mut [Complex<f32>]) + Send + 
 }
 
 pub fn const_phase_mul() -> NodeDescriptor {
-    let mut mul = 1.0;
     NodeDescriptor::new("SpecFX.const-phase-mul", move |ctx, cfg| {
-        new_stftfx(ctx, cfg, 1, 0, move |lock, _, frame| {
+        let mut mul = 1.0;
+        let mut init = false;
+        let ctl = new_stftfx(ctx, cfg, 1, 0, move |ctl, lock, _, frame| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_mul| mul = saved_mul);
+                init = true;
+            }
             if let Ok(new_mul) = lock.read_n::<f32>(InPortID(0), 1).map(|data| data[0]) {
                 mul = new_mul;
+                ctl.save(mul).unwrap();
             }
             for (idx, bin) in frame.iter_mut().enumerate() {
                 let mut phase = bin.arg();
@@ -104,6 +112,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
                 phase *= mul;
                 *bin = Complex::<f32>::from_polar(&amp, &phase);
             }
-        })
+        });
+        ctl
     })
 }

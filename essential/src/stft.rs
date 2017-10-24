@@ -31,9 +31,7 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     node.in_port(InPortID(0)).unwrap().set_name("size");
     node.in_port(InPortID(1)).unwrap().set_name("hop");
 
-    let mut size = 1024;
-    let mut hop = 256;
-    let max_buffered = size * 8;
+    let max_buffered = 1<<16;
 
     let remote_ctl = Arc::new(RemoteControl::new(
         ctx,
@@ -49,18 +47,28 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             },
         ],
     ));
+    remote_ctl.set_saved_data(&config.saved_data);
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Model {
+        size: usize,
+        hop: usize,
+    }
+    let mut md = remote_ctl.restore().unwrap_or(Model {
+        size: 4096,
+        hop: 256,
+    });
 
     let ctl = remote_ctl.clone();
-    let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+    let mut window: Vec<T> = apodize::hanning_iter(md.size).map(|x| x.sqrt() as T).collect();
     thread::spawn(move || {
         let mut empty_q = VecDeque::<T>::new();
-        empty_q.extend(vec![0.0; size - hop]);
+        empty_q.extend(vec![0.0; md.size - md.hop]);
         let mut queues = vec![empty_q.clone(); ctl.node().in_ports().len()];
-        let mut input = vec![Complex::zero(); size];
-        let mut output = vec![Complex::zero(); size];
+        let mut input = vec![Complex::zero(); md.size];
+        let mut output = vec![Complex::zero(); md.size];
 
         let mut planner = FFTplanner::new(false);
-        let mut fft = planner.plan_fft(size);
+        let mut fft = planner.plan_fft(md.size);
 
         while !ctl.stopped() {
             while let Some(msg) = ctl.recv_message() {
@@ -82,21 +90,23 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
             }
             let lock = node_ctx.lock_all();
             if let Ok(new_size) = lock.read_n::<usize>(InPortID(0), 1).map(|data| data[0]) {
-                size = (new_size & !1).max(1).min(1<<20);
-                hop = hop.min(size);
-                println!("Stft resize {} by {}", size, hop);
-                fft = planner.plan_fft(size);
-                input.resize(size, Complex::zero());
-                output.resize(size, Complex::zero());
-                empty_q.resize(size - hop, 0.0);
-                queues.iter_mut().for_each(|q| q.resize(size - hop, 0.0));
-                window = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
+                md.size = (new_size & !1).max(1).min(1<<20);
+                md.hop = md.hop.min(md.size);
+                println!("Stft resize {:?}", md);
+                ctl.save(&md).unwrap();
+                fft = planner.plan_fft(md.size);
+                input.resize(md.size, Complex::zero());
+                output.resize(md.size, Complex::zero());
+                empty_q.resize(md.size - md.hop, 0.0);
+                queues.iter_mut().for_each(|q| q.resize(md.size - md.hop, 0.0));
+                window = apodize::hanning_iter(md.size).map(|x| x.sqrt() as T).collect();
             }
             if let Ok(new_hop) = lock.read_n::<usize>(InPortID(1), 1).map(|data| data[0]) {
-                hop = new_hop.max(1).min(size);
-                println!("Stft resize {} by {}", size, hop);
-                empty_q.resize(size - hop, 0.0);
-                queues.iter_mut().for_each(|q| q.resize(size - hop, 0.0));
+                md.hop = new_hop.max(1).min(md.size);
+                println!("Stft resize {:?}", md);
+                ctl.save(&md).unwrap();
+                empty_q.resize(md.size - md.hop, 0.0);
+                queues.iter_mut().for_each(|q| q.resize(md.size - md.hop, 0.0));
             }
             let res: Result<()> = do catch {
                 for ((in_port, out_port), queue) in node_ctx
@@ -106,19 +116,19 @@ fn new_stft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
                     .zip(node_ctx.node().out_ports())
                     .zip(queues.iter_mut())
                 {
-                    lock.wait(|lock| Ok(lock.available::<T>(in_port.id())? >= hop))?;
-                    queue.extend(lock.read_n::<T>(in_port.id(), hop)?);
+                    lock.wait(|lock| Ok(lock.available::<T>(in_port.id())? >= md.hop))?;
+                    queue.extend(lock.read_n::<T>(in_port.id(), md.hop)?);
 
                     for ((dst, src), mul) in input.iter_mut().zip(queue.iter()).zip(&window) {
                         dst.re = *src * mul;
                         dst.im = 0.0;
                     }
-                    queue.drain(..hop);
+                    queue.drain(..md.hop);
                     fft.process(&mut input, &mut output);
 
                     let header = STFTHeader {
-                        size: size / 2,
-                        hop,
+                        size: md.size / 2,
+                        hop: md.hop,
                     };
                     lock.write(out_port.id(), &[header])?;
                     lock.wait(|lock| Ok(lock.buffered::<T>(out_port.id())? < max_buffered))?;

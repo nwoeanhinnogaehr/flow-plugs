@@ -10,6 +10,8 @@ extern crate modular_flow;
 extern crate palette;
 extern crate rustfft;
 extern crate sdl2;
+#[macro_use]
+extern crate serde_derive;
 
 mod audio_io;
 mod stft;
