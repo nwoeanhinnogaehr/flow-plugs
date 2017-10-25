@@ -283,3 +283,82 @@ pub fn run_constant(
         Ok(())
     })
 }
+
+pub fn repeater<T: ByteConvertible + Default + Send + 'static>() -> NodeDescriptor {
+    NodeDescriptor::new(
+        format!("Repeater::{}", unsafe { ::std::intrinsics::type_name::<T>() }),
+        run_repeater::<T>,
+    )
+}
+
+fn run_repeater<T: ByteConvertible + Default + Send + 'static>(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+    use std::collections::VecDeque;
+
+    let mut buffer = Vec::new();
+    let mut init = false;
+    let mut cur_rep = 1;
+    let mut rep_buf = VecDeque::new();
+    let mut in_buf = VecDeque::new();
+    let ctl = macros::simple_node(ctx, cfg, (3, 3), vec![], move |node_ctx, ctl| {
+        if !init {
+            if let Ok(data) = ctl.restore() {
+                cur_rep = data;
+            }
+            init = true; // ugh
+        }
+        let lock = node_ctx.lock_all();
+
+        // wait for request
+        lock.wait(|lock| Ok(lock.available::<usize>(InPortID(0))? >= 1))?;
+        let req_size = lock.read_n::<usize>(InPortID(0), 1)?[0];
+        buffer.resize(req_size, T::default());
+
+        let mut buf_idx = 0;
+        while buf_idx < req_size {
+            if let Some(rep) = rep_buf.front().cloned() {
+                println!("set rep {}", rep);
+                cur_rep = rep;
+                ctl.save(cur_rep).unwrap();
+                rep_buf.pop_front();
+            } else {
+                let write_req_result = lock.write(OutPortID(0), &[req_size]);
+                let ok = write_req_result.is_ok();
+                ignore_nonfatal!({write_req_result?});
+                if ok {
+                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= req_size))?;
+                }
+                ignore_nonfatal!({
+                    let reps = lock.read::<usize>(InPortID(1))?;
+                    rep_buf.extend(&reps);
+                });
+            }
+
+            if in_buf.is_empty() {
+                lock.write(OutPortID(1), &[req_size])?;
+                lock.wait(|lock| Ok(lock.available::<T>(InPortID(2))? >= req_size))?;
+                let data = lock.read_n::<T>(InPortID(2), req_size)?;
+                in_buf.extend(&data);
+            }
+            let sample = in_buf.front().cloned().unwrap();
+            in_buf.pop_front();
+            for _ in 0..cur_rep {
+                buffer[buf_idx] = sample;
+
+                buf_idx += 1;
+                if buf_idx >= req_size {
+                    break;
+                }
+            }
+        }
+        lock.write(OutPortID(2), &buffer)?;
+
+        Ok(())
+    });
+    ctl.node().in_port(InPortID(0)).unwrap().set_name("req");
+    ctl.node().in_port(InPortID(1)).unwrap().set_name("rep");
+    ctl.node().in_port(InPortID(2)).unwrap().set_name("in");
+    ctl.node().out_port(OutPortID(0)).unwrap().set_name("rep req");
+    ctl.node().out_port(OutPortID(1)).unwrap().set_name("in req");
+    ctl.node().out_port(OutPortID(2)).unwrap().set_name("out");
+    ctl
+}

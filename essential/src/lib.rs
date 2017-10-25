@@ -41,6 +41,7 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         basics::debug::<f32>(),
         basics::constant(message::Type::F32),
         basics::constant(message::Type::Usize),
+        basics::repeater::<f32>(),
         synth::square(),
         synth::saw(),
         synth::sin(),

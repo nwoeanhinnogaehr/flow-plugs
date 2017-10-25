@@ -39,26 +39,27 @@ pub fn saw() -> NodeDescriptor {
 }
 
 fn run_osc<O: Osc>(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
-    let buffer_size = 32;
-    let max_buffered = 4096;
     let mut phase = 0.0f64;
-    let mut buffer = vec![0.0f32; buffer_size];
-    let mut freq = 0.0f64;
-    macros::simple_node(ctx, cfg, (1, 1), vec![], move |node_ctx, _| {
+    let mut buffer = vec![];
+    let ctl = macros::simple_node(ctx, cfg, (2, 1), vec![], move |node_ctx, _| {
         let lock = node_ctx.lock_all();
-        if let Ok(Some(new_freq)) = lock.read_n::<f32>(InPortID(0), 1)
-            .map(|data| data.last().cloned())
-        {
-            freq = new_freq as f64;
-        }
-        lock.wait(|lock| {
-            Ok(lock.buffered::<f32>(OutPortID(0))? < max_buffered)
-        })?;
-        for x in &mut buffer {
+
+        // wait for request
+        lock.wait(|lock| Ok(lock.available::<usize>(InPortID(0))? >= 1))?;
+        let req_size = lock.read_n::<usize>(InPortID(0), 1)?[0];
+        buffer.resize(req_size, 0.0);
+
+        lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= req_size))?;
+        let freqs = lock.read_n::<f32>(InPortID(1), req_size)?;
+        for (x, freq) in buffer.iter_mut().zip(freqs) {
             *x = O::f(phase) as f32;
-            phase += 2.0 * freq * f64::consts::PI / 44100.0;
+            phase += 2.0 * freq as f64 * f64::consts::PI / 44100.0;
         }
         lock.write(OutPortID(0), &buffer)?;
         Ok(())
-    })
+    });
+    ctl.node().in_port(InPortID(0)).unwrap().set_name("wave req");
+    ctl.node().in_port(InPortID(1)).unwrap().set_name("freq");
+    ctl.node().out_port(OutPortID(0)).unwrap().set_name("wave");
+    ctl
 }
