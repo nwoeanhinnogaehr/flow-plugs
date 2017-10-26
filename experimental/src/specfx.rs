@@ -15,11 +15,6 @@ unsafe impl TransmuteByteConvertible for STFTHeader {}
 
 const MAX_SIZE: usize = 1 << 28;
 
-// need: process fn
-// port resize fn
-// buf resize fn
-// num aux in
-//
 fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<f32>]) + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
@@ -104,12 +99,51 @@ pub fn const_phase_mul() -> NodeDescriptor {
                 mul = new_mul;
                 ctl.save(mul).unwrap();
             }
-            for (idx, bin) in frame.iter_mut().enumerate() {
+            for bin in frame {
                 let mut phase = bin.arg();
                 let amp = bin.norm();
                 phase *= mul;
                 *bin = Complex::<f32>::from_polar(&amp, &phase);
             }
+        });
+        ctl
+    })
+}
+
+pub fn hold() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.hold", move |ctx, cfg| {
+        #[derive(Serialize, Deserialize, Default)]
+        struct Model {
+            a_mix: f32,
+            b_mix: f32,
+        }
+        let mut model = Model::default();
+        let mut init = false;
+        let mut prev_frame = vec![];
+        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, _, frame| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_model| model = saved_model);
+                init = true;
+            }
+            if let Ok(new_a_mix) = lock.read_n::<f32>(InPortID(0), 1).map(|data| data[0]) {
+                model.a_mix = new_a_mix.min(1.0).max(0.0);
+                ctl.save(&model).unwrap();
+            }
+            if let Ok(new_b_mix) = lock.read_n::<f32>(InPortID(1), 1).map(|data| data[0]) {
+                model.b_mix = new_b_mix.min(1.0).max(0.0);
+                ctl.save(&model).unwrap();
+            }
+            prev_frame.resize(frame.len(), Complex::<f32>::default());
+            for (bin, prev) in frame.iter_mut().zip(prev_frame.iter()) {
+                let mut a = bin.arg();
+                let mut b = bin.norm();
+                let mut prev_a = prev.arg();
+                let mut prev_b = prev.norm();
+                a = (1.0 - model.a_mix) * a + model.a_mix * prev_a;
+                b = (1.0 - model.b_mix) * b + model.b_mix * prev_b;
+                *bin = Complex::<f32>::from_polar(&b, &a);
+            }
+            prev_frame.clone_from_slice(frame);
         });
         ctl
     })

@@ -6,6 +6,8 @@
 extern crate flow_synth;
 extern crate modular_flow;
 extern crate rustfft;
+#[macro_use]
+extern crate serde_derive;
 
 mod bytebeat;
 mod specfx;
@@ -51,5 +53,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             (s % 256) as usize
         }),
         specfx::const_phase_mul(),
+        specfx::hold(),
     ]
 }

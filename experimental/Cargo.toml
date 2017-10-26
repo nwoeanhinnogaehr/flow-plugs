@@ -7,6 +7,8 @@ authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 modular-flow = { path = "../../modular-flow" }
 flow-synth = { path = "../../flow-synth" }
 rustfft = "*"
+serde_derive = "*"
+serde = "*"
 
 [lib]
 name = "flow_plug_experimental"

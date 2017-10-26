@@ -125,6 +125,8 @@ dependencies = [
  "flow-synth 0.1.0",
  "modular-flow 0.0.1",
  "rustfft 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
