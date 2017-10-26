@@ -42,6 +42,14 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let s = t & t >> 5 | t >> 7;
             (1 << (s * s / 666) % 16) as f32 % 22050.0
         }),
+        bytebeat::beat("kadv", |t| {
+            let s = t & t >> 5 | t >> 7;
+            (1.3f32).powf((s * s / 666) as f32  % 32.0) % 22050.0
+        }),
+        bytebeat::beat("ksimplei", |t| {
+            let s = t & t >> 5 | t >> 7;
+            (s % 256) as usize
+        }),
         specfx::const_phase_mul(),
     ]
 }

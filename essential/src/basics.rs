@@ -316,7 +316,6 @@ fn run_repeater<T: ByteConvertible + Default + Send + 'static>(ctx: Arc<Context>
         let mut buf_idx = 0;
         while buf_idx < req_size {
             if let Some(rep) = rep_buf.front().cloned() {
-                println!("set rep {}", rep);
                 cur_rep = rep;
                 ctl.save(cur_rep).unwrap();
                 rep_buf.pop_front();
