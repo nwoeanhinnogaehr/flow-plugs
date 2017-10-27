@@ -4,7 +4,7 @@ use flow_synth::control::*;
 use flow_synth::macros;
 use std::sync::Arc;
 use rustfft::num_complex::Complex;
-use rustfft::num_traits::Zero;
+use std::f32;
 
 #[derive(Debug, Copy, Clone)]
 struct STFTHeader {
@@ -15,7 +15,9 @@ unsafe impl TransmuteByteConvertible for STFTHeader {}
 
 const MAX_SIZE: usize = 1 << 28;
 
-fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<f32>]) + Send + 'static>(
+type STFTFrame = (STFTHeader, Vec<Complex<f32>>);
+
+fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
     num_aux_in: usize,
@@ -56,27 +58,29 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, usize, &mut [Complex<
             }
             let lock = node_ctx.lock_all();
 
-            for (in_port, out_port) in node.in_ports()[num_aux_in..]
-                .iter()
-                .zip(&node.out_ports()[num_aux_out..])
-            {
+            let frames: Result<Vec<STFTFrame>> = node.in_ports()[num_aux_in..].iter().map(|in_port| {
                 lock.wait(|lock| Ok(lock.available::<STFTHeader>(in_port.id())? >= 1))?;
                 let header = lock.read_n::<STFTHeader>(in_port.id(), 1)?[0];
                 if size != header.size {
                     if header.size >= MAX_SIZE {
-                        println!("specfx.hold got header too large {:?}", header);
-                        return Ok(());
+                        println!("specfx got header too large {:?}", header);
+                        return Err(Error::Unavailable);
                     }
-                    println!("specfx.hold size change {:?}", header);
+                    println!("specfx size change {:?}", header);
                     size = header.size;
                 }
                 lock.wait(|lock| {
                     Ok(lock.available::<Complex<f32>>(in_port.id())? >= size)
                 })?;
-                let mut frame = lock.read_n::<Complex<f32>>(in_port.id(), size)?;
+                Ok((header, lock.read_n::<Complex<f32>>(in_port.id(), size)?))
+            }).collect();
+            let mut frames = frames?;
 
-                process(ctl, &lock, header.hop, &mut frame);
+            process(ctl, &lock, &mut frames);
 
+            for (&(header, ref frame), out_port) in frames.iter()
+                .zip(&node.out_ports()[num_aux_out..])
+            {
                 lock.write(out_port.id(), &[header])?;
                 lock.write(out_port.id(), &frame)?;
             }
@@ -90,7 +94,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.const-phase-mul", move |ctx, cfg| {
         let mut mul = 1.0;
         let mut init = false;
-        let ctl = new_stftfx(ctx, cfg, 1, 0, move |ctl, lock, _, frame| {
+        let ctl = new_stftfx(ctx, cfg, 1, 0, move |ctl, lock, frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_mul| mul = saved_mul);
                 init = true;
@@ -99,11 +103,13 @@ pub fn const_phase_mul() -> NodeDescriptor {
                 mul = new_mul;
                 ctl.save(mul).unwrap();
             }
-            for bin in frame {
-                let mut phase = bin.arg();
-                let amp = bin.norm();
-                phase *= mul;
-                *bin = Complex::<f32>::from_polar(&amp, &phase);
+            for &mut (_, ref mut frame) in frames {
+                for bin in frame {
+                    let mut phase = bin.arg();
+                    let amp = bin.norm();
+                    phase *= mul;
+                    *bin = Complex::<f32>::from_polar(&amp, &phase);
+                }
             }
         });
         ctl
@@ -119,8 +125,8 @@ pub fn hold() -> NodeDescriptor {
         }
         let mut model = Model::default();
         let mut init = false;
-        let mut prev_frame = vec![];
-        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, _, frame| {
+        let mut prev_frames = vec![];
+        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_model| model = saved_model);
                 init = true;
@@ -133,17 +139,88 @@ pub fn hold() -> NodeDescriptor {
                 model.b_mix = new_b_mix.min(1.0).max(0.0);
                 ctl.save(&model).unwrap();
             }
-            prev_frame.resize(frame.len(), Complex::<f32>::default());
-            for (bin, prev) in frame.iter_mut().zip(prev_frame.iter()) {
-                let mut a = bin.arg();
-                let mut b = bin.norm();
-                let mut prev_a = prev.arg();
-                let mut prev_b = prev.norm();
-                a = (1.0 - model.a_mix) * a + model.a_mix * prev_a;
-                b = (1.0 - model.b_mix) * b + model.b_mix * prev_b;
-                *bin = Complex::<f32>::from_polar(&b, &a);
+            prev_frames.resize(frames.len(), Vec::new());
+            for (&mut (_, ref mut frame), ref mut prev_frame) in frames.iter_mut().zip(prev_frames.iter_mut()) {
+                prev_frame.resize(frame.len(), Complex::<f32>::default());
+                for (bin, prev) in frame.iter_mut().zip(prev_frame.iter()) {
+                    let mut a = bin.re;
+                    let mut b = bin.im;
+                    let mut prev_a = prev.re;
+                    let mut prev_b = prev.im;
+                    a = (1.0 - model.a_mix) * a + model.a_mix * prev_a;
+                    b = (1.0 - model.b_mix) * b + model.b_mix * prev_b;
+                    *bin = Complex::<f32>::new(a, b);
+                }
+                prev_frame.clone_from_slice(&frame);
             }
-            prev_frame.clone_from_slice(frame);
+        });
+        ctl
+    })
+}
+
+pub fn to_polar() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.to-polar", move |ctx, cfg| {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+            for &mut (_, ref mut frame) in frames {
+                for bin in frame {
+                    let norm = bin.norm();
+                    let arg = bin.arg();
+                    *bin = Complex::<f32>::new(norm, arg);
+                }
+            }
+        });
+        ctl
+    })
+}
+pub fn from_polar() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.from-polar", move |ctx, cfg| {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+            for &mut (_, ref mut frame) in frames {
+                for bin in frame {
+                    let norm = bin.re;
+                    let arg = bin.im;
+                    *bin = Complex::<f32>::from_polar(&norm, &arg);
+                }
+            }
+        });
+        ctl
+    })
+}
+
+
+pub fn to_phase_diff() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.to-phase-diff", move |ctx, cfg| {
+        let mut prev_phases = Vec::new();
+        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+            prev_phases.resize(frames.len(), Vec::new());
+            for (&mut (_, ref mut frame), ref mut prev_phase) in frames.iter_mut().zip(prev_phases.iter_mut()) {
+                prev_phase.resize(frame.len(), 0.0);
+                for (bin, prev) in frame.iter_mut().zip(prev_phase.iter_mut()) {
+                    let norm = bin.norm();
+                    let arg = bin.arg();
+                    let diff = arg - *prev;
+                    *prev = arg;
+                    *bin = Complex::<f32>::new(norm, diff);
+                }
+            }
+        });
+        ctl
+    })
+}
+pub fn from_phase_diff() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.from-phase-diff", move |ctx, cfg| {
+        let mut accum_phases = Vec::new();
+        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+            accum_phases.resize(frames.len(), Vec::new());
+            for (&mut (_, ref mut frame), ref mut accum_phase) in frames.iter_mut().zip(accum_phases.iter_mut()) {
+                accum_phase.resize(frame.len(), 0.0);
+                for (bin, accum) in frame.iter_mut().zip(accum_phase.iter_mut()) {
+                    let norm = bin.re;
+                    let diff = bin.im;
+                    *accum = (*accum + diff) % (f32::consts::PI * 2.0);
+                    *bin = Complex::<f32>::from_polar(&norm, accum);
+                }
+            }
         });
         ctl
     })

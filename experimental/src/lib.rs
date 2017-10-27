@@ -2,7 +2,6 @@
 #![feature(core_intrinsics)]
 #![feature(duration_from_micros)]
 
-#[macro_use]
 extern crate flow_synth;
 extern crate modular_flow;
 extern crate rustfft;
@@ -54,5 +53,9 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         }),
         specfx::const_phase_mul(),
         specfx::hold(),
+        specfx::to_polar(),
+        specfx::from_polar(),
+        specfx::to_phase_diff(),
+        specfx::from_phase_diff(),
     ]
 }
