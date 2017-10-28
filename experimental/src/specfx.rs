@@ -207,6 +207,9 @@ pub fn backbuffer() -> NodeDescriptor {
 
             for (&mut (_, ref mut frame), ref mut buffer) in frames.iter_mut().zip(buffers.iter_mut()) {
                 let len = buffer.len();
+                if len == 0 {
+                    continue;
+                }
                 // write to buffer
                 {
                     let write_buffer = &mut buffer[write_head % len];
