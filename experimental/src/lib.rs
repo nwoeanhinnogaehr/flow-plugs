@@ -2,6 +2,7 @@
 #![feature(core_intrinsics)]
 #![feature(duration_from_micros)]
 
+#[macro_use]
 extern crate flow_synth;
 extern crate modular_flow;
 extern crate rustfft;
@@ -30,6 +31,10 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let z = (1 + (t >> 9 | t >> 13)) as f32;
             (x / (1.0 + (x % z - z / 2.0).abs()) / 256.0).sin()
         }),
+        bytebeat::beat("asketchi", |t| {
+            let x = t as f32 * 9.5734857;
+            (x / (1.0 + x % (1 + (t >> 9 | t >> 13)) as f32)) as usize
+        }),
         bytebeat::beat("ksketch", |t| {
             let x = t as f32;
             let s = x / (1.0 + x % (1 + (t >> 5 | t >> 7)) as f32);
@@ -51,11 +56,15 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let s = t & t >> 5 | t >> 7;
             (s % 256) as usize
         }),
+        bytebeat::beat("counter", |t| {
+            t as usize
+        }),
         specfx::const_phase_mul(),
         specfx::hold(),
         specfx::to_polar(),
         specfx::from_polar(),
         specfx::to_phase_diff(),
         specfx::from_phase_diff(),
+        specfx::backbuffer(),
     ]
 }

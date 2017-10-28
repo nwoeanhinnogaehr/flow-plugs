@@ -5,6 +5,7 @@ use flow_synth::macros;
 use std::sync::Arc;
 use rustfft::num_complex::Complex;
 use std::f32;
+use std::collections::VecDeque;
 
 #[derive(Debug, Copy, Clone)]
 struct STFTHeader {
@@ -17,7 +18,7 @@ const MAX_SIZE: usize = 1 << 28;
 
 type STFTFrame = (STFTHeader, Vec<Complex<f32>>);
 
-fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) + Send + 'static>(
+fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) -> Result<()> + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
     num_aux_in: usize,
@@ -76,7 +77,7 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) + S
             }).collect();
             let mut frames = frames?;
 
-            process(ctl, &lock, &mut frames);
+            process(ctl, &lock, &mut frames)?;
 
             for (&(header, ref frame), out_port) in frames.iter()
                 .zip(&node.out_ports()[num_aux_out..])
@@ -111,6 +112,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
                     *bin = Complex::<f32>::from_polar(&amp, &phase);
                 }
             }
+            Ok(())
         });
         ctl
     })
@@ -153,7 +155,78 @@ pub fn hold() -> NodeDescriptor {
                 }
                 prev_frame.clone_from_slice(&frame);
             }
+            Ok(())
         });
+        ctl
+    })
+}
+
+pub fn backbuffer() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.backbuffer", move |ctx, cfg| {
+        #[derive(Serialize, Deserialize, Default)]
+        struct Model {
+            size: usize,
+        }
+        let buffer_size = 128;
+        let mut write_head = 0;
+        let mut read_head = 0;
+        let mut read_q = VecDeque::new();
+        let mut model = Model::default();
+        let mut init = false;
+        let mut buffers: Vec<Vec<_>> = Vec::new();
+        let ctl = new_stftfx(ctx, cfg, 2, 1, move |ctl, lock, frames| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_model| model = saved_model);
+                init = true;
+            }
+            if let Ok(new_size) = lock.read_n::<usize>(InPortID(0), 1).map(|data| data[0]) {
+                model.size = new_size.max(1).min(1<<16);
+                println!("bbuf set size {}", model.size);
+                ctl.save(&model).unwrap();
+            }
+            buffers.resize(frames.len(), Vec::new());
+            for buffer in &mut buffers {
+                buffer.resize(model.size, Vec::new());
+            }
+            if read_q.is_empty() {
+                let write_req_result = lock.write(OutPortID(0), &[buffer_size]);
+                let ok = write_req_result.is_ok();
+                ignore_nonfatal!({write_req_result?});
+                if ok {
+                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= buffer_size))?;
+                }
+                ignore_nonfatal!({
+                    let reps = lock.read::<usize>(InPortID(1))?;
+                    read_q.extend(&reps);
+                });
+            }
+            if let Some(read_pos) = read_q.front().cloned() {
+                read_head = read_pos;
+                read_q.pop_front();
+            }
+
+            for (&mut (_, ref mut frame), ref mut buffer) in frames.iter_mut().zip(buffers.iter_mut()) {
+                let len = buffer.len();
+                // write to buffer
+                {
+                    let write_buffer = &mut buffer[write_head % len];
+                    write_buffer.resize(frame.len(), Complex::<f32>::default());
+                    write_buffer.clone_from_slice(&frame);
+                }
+
+                // read from buffer
+                {
+                    let read_buffer = &mut buffer[(write_head + read_head) % len];
+                    read_buffer.resize(frame.len(), Complex::<f32>::default());
+                    frame.clone_from_slice(read_buffer);
+                }
+            }
+            write_head += 1;
+            Ok(())
+        });
+        ctl.node().in_port(InPortID(0)).unwrap().set_name("size");
+        ctl.node().in_port(InPortID(1)).unwrap().set_name("read head");
+        ctl.node().out_port(OutPortID(0)).unwrap().set_name("read head req");
         ctl
     })
 }
@@ -168,6 +241,7 @@ pub fn to_polar() -> NodeDescriptor {
                     *bin = Complex::<f32>::new(norm, arg);
                 }
             }
+            Ok(())
         });
         ctl
     })
@@ -182,6 +256,7 @@ pub fn from_polar() -> NodeDescriptor {
                     *bin = Complex::<f32>::from_polar(&norm, &arg);
                 }
             }
+            Ok(())
         });
         ctl
     })
@@ -203,6 +278,7 @@ pub fn to_phase_diff() -> NodeDescriptor {
                     *bin = Complex::<f32>::new(norm, diff);
                 }
             }
+            Ok(())
         });
         ctl
     })
@@ -221,6 +297,7 @@ pub fn from_phase_diff() -> NodeDescriptor {
                     *bin = Complex::<f32>::from_polar(&norm, accum);
                 }
             }
+            Ok(())
         });
         ctl
     })
