@@ -19,6 +19,39 @@ const MAX_SIZE: usize = 1 << 28;
 
 type STFTFrame = (STFTHeader, Vec<Complex<f32>>);
 
+struct ReqQueue<T: ByteConvertible> {
+    q: VecDeque<T>,
+    in_port: InPortID,
+    out_port: OutPortID,
+    buffer_size: usize,
+}
+
+impl<T: ByteConvertible> ReqQueue<T> {
+    fn new(in_port: InPortID, out_port: OutPortID, buffer_size: usize) -> ReqQueue<T> {
+        ReqQueue {
+            q: VecDeque::new(),
+            in_port,
+            out_port,
+            buffer_size,
+        }
+    }
+    fn next(&mut self, lock: &NodeGuard) -> Result<Option<T>> {
+        if self.q.is_empty() {
+            let write_result = lock.write(self.out_port, &[self.buffer_size]);
+            let ok = write_result.is_ok();
+            ignore_nonfatal!({write_result?});
+            if ok {
+                lock.wait(|lock| Ok(lock.available::<T>(self.in_port)? >= self.buffer_size))?;
+            }
+            ignore_nonfatal!({
+                let vals = lock.read::<T>(self.in_port)?;
+                self.q.extend(&vals);
+            });
+        }
+        Ok(self.q.pop_front())
+    }
+}
+
 fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) -> Result<()> + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
@@ -201,6 +234,8 @@ pub fn resize() -> NodeDescriptor {
     })
 }
 
+
+
 pub fn rotate() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.rotate", move |ctx, cfg| {
         #[derive(Serialize, Deserialize, Default)]
@@ -208,9 +243,8 @@ pub fn rotate() -> NodeDescriptor {
             a_rot: usize,
             b_rot: usize,
         }
-        let buffer_size = 128;
-        let mut a_q = VecDeque::new();
-        let mut b_q = VecDeque::new();
+        let mut a_q = ReqQueue::new(InPortID(0), OutPortID(0), 128);
+        let mut b_q = ReqQueue::new(InPortID(1), OutPortID(1), 128);
         let mut model = Model::default();
         let mut init = false;
         let ctl = new_stftfx(ctx, cfg, 2, 2, move |ctl, lock, frames| {
@@ -218,37 +252,13 @@ pub fn rotate() -> NodeDescriptor {
                 let _ = ctl.restore().map(|saved_model| model = saved_model);
                 init = true;
             }
-            if a_q.is_empty() {
-                let write_req_result = lock.write(OutPortID(0), &[buffer_size]);
-                let ok = write_req_result.is_ok();
-                ignore_nonfatal!({write_req_result?});
-                if ok {
-                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(0))? >= buffer_size))?;
-                }
-                ignore_nonfatal!({
-                    let reps = lock.read::<usize>(InPortID(0))?;
-                    a_q.extend(&reps);
-                });
-            }
-            if let Some(rot) = a_q.front().cloned() {
+            if let Some(rot) = a_q.next(&lock)? {
                 model.a_rot = rot;
-                a_q.pop_front();
+                ctl.save(&model).unwrap();
             }
-            if b_q.is_empty() {
-                let write_req_result = lock.write(OutPortID(1), &[buffer_size]);
-                let ok = write_req_result.is_ok();
-                ignore_nonfatal!({write_req_result?});
-                if ok {
-                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= buffer_size))?;
-                }
-                ignore_nonfatal!({
-                    let reps = lock.read::<usize>(InPortID(1))?;
-                    b_q.extend(&reps);
-                });
-            }
-            if let Some(rot) = b_q.front().cloned() {
+            if let Some(rot) = b_q.next(&lock)? {
                 model.b_rot = rot;
-                b_q.pop_front();
+                ctl.save(&model).unwrap();
             }
 
             for &mut (_, ref mut frame) in frames {
@@ -277,10 +287,9 @@ pub fn backbuffer() -> NodeDescriptor {
         struct Model {
             size: usize,
         }
-        let buffer_size = 128;
         let mut write_head = 0;
         let mut read_head = 0;
-        let mut read_q = VecDeque::new();
+        let mut read_q = ReqQueue::new(InPortID(1), OutPortID(0), 128);
         let mut model = Model::default();
         let mut init = false;
         let mut buffers: Vec<Vec<_>> = Vec::new();
@@ -298,21 +307,8 @@ pub fn backbuffer() -> NodeDescriptor {
             for buffer in &mut buffers {
                 buffer.resize(model.size, Vec::new());
             }
-            if read_q.is_empty() {
-                let write_req_result = lock.write(OutPortID(0), &[buffer_size]);
-                let ok = write_req_result.is_ok();
-                ignore_nonfatal!({write_req_result?});
-                if ok {
-                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= buffer_size))?;
-                }
-                ignore_nonfatal!({
-                    let reps = lock.read::<usize>(InPortID(1))?;
-                    read_q.extend(&reps);
-                });
-            }
-            if let Some(read_pos) = read_q.front().cloned() {
+            if let Some(read_pos) = read_q.next(&lock)? {
                 read_head = read_pos;
-                read_q.pop_front();
             }
 
             for (&mut (_, ref mut frame), ref mut buffer) in frames.iter_mut().zip(buffers.iter_mut()) {
