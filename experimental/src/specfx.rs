@@ -234,39 +234,26 @@ pub fn resize() -> NodeDescriptor {
     })
 }
 
-
-
 pub fn rotate() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.rotate", move |ctx, cfg| {
-        #[derive(Serialize, Deserialize, Default)]
-        struct Model {
-            a_rot: usize,
-            b_rot: usize,
-        }
+        let mut a_rot = 0;
+        let mut b_rot = 0;
         let mut a_q = ReqQueue::new(InPortID(0), OutPortID(0), 128);
         let mut b_q = ReqQueue::new(InPortID(1), OutPortID(1), 128);
-        let mut model = Model::default();
-        let mut init = false;
-        let ctl = new_stftfx(ctx, cfg, 2, 2, move |ctl, lock, frames| {
-            if !init { // ugh
-                let _ = ctl.restore().map(|saved_model| model = saved_model);
-                init = true;
-            }
+        let ctl = new_stftfx(ctx, cfg, 2, 2, move |_, lock, frames| {
             if let Some(rot) = a_q.next(&lock)? {
-                model.a_rot = rot;
-                ctl.save(&model).unwrap();
+                a_rot = rot;
             }
             if let Some(rot) = b_q.next(&lock)? {
-                model.b_rot = rot;
-                ctl.save(&model).unwrap();
+                b_rot = rot;
             }
 
             for &mut (_, ref mut frame) in frames {
                 let arr = af::Array::new(&frame, af::Dim4::new(&[frame.len() as u64, 1, 1, 1]));
                 let a = af::real(&arr);
                 let b = af::imag(&arr);
-                let a = af::shift(&a, &[model.a_rot as i32, 1, 1, 1]);
-                let b = af::shift(&b, &[model.b_rot as i32, 1, 1, 1]);
+                let a = af::shift(&a, &[a_rot as i32, 1, 1, 1]);
+                let b = af::shift(&b, &[b_rot as i32, 1, 1, 1]);
                 let out_arr = af::cplx2(&a, &b, false);
                 out_arr.host(frame);
             }
