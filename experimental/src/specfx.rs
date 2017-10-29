@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rustfft::num_complex::Complex;
 use std::f32;
 use std::collections::VecDeque;
+use arrayfire as af;
 
 #[derive(Debug, Copy, Clone)]
 struct STFTHeader {
@@ -160,6 +161,46 @@ pub fn hold() -> NodeDescriptor {
         ctl
     })
 }
+
+pub fn resize() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.resize", move |ctx, cfg| {
+        #[derive(Serialize, Deserialize, Default)]
+        struct Model {
+            size: usize,
+            hop: usize,
+        }
+        let mut model = Model {
+            size: 2048,
+            hop: 512,
+        };
+        let mut init = false;
+        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, frames| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_model| model = saved_model);
+                init = true;
+            }
+            if let Ok(new_size) = lock.read_n::<usize>(InPortID(0), 1).map(|data| data[0]) {
+                model.size = new_size.max(1).min(1<<20);
+                ctl.save(&model).unwrap();
+            }
+            if let Ok(new_hop) = lock.read_n::<usize>(InPortID(1), 1).map(|data| data[0]) {
+                model.hop = new_hop.max(1).min(model.size);
+                ctl.save(&model).unwrap();
+            }
+            for &mut (ref mut header, ref mut frame) in frames {
+                let arr = af::Array::new(&frame, af::Dim4::new(&[frame.len() as u64, 1, 1, 1]));
+                let out_arr = af::resize(&arr, model.size as i64, 1, af::InterpType::BILINEAR);
+                frame.resize(model.size, Complex::<f32>::default());
+                out_arr.host(frame);
+                header.size = model.size;
+                header.hop = model.hop;
+            }
+            Ok(())
+        });
+        ctl
+    })
+}
+
 
 pub fn backbuffer() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.backbuffer", move |ctx, cfg| {

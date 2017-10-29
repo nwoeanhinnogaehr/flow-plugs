@@ -9,6 +9,7 @@ flow-synth = { path = "../../flow-synth" }
 rustfft = "*"
 serde_derive = "*"
 serde = "*"
+arrayfire = "*"
 
 [lib]
 name = "flow_plug_experimental"

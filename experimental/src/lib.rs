@@ -8,6 +8,8 @@ extern crate modular_flow;
 extern crate rustfft;
 #[macro_use]
 extern crate serde_derive;
+extern crate arrayfire;
+use arrayfire as af;
 
 mod bytebeat;
 mod specfx;
@@ -21,6 +23,7 @@ pub fn get_name() -> String {
 
 #[no_mangle]
 pub fn get_descriptors() -> Vec<NodeDescriptor> {
+    af::init();
     vec![
         bytebeat::beat("asketch", |t| {
             let x = t as f32;
@@ -66,5 +69,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         specfx::to_phase_diff(),
         specfx::from_phase_diff(),
         specfx::backbuffer(),
+        specfx::resize(),
     ]
 }
