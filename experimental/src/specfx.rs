@@ -201,6 +201,75 @@ pub fn resize() -> NodeDescriptor {
     })
 }
 
+pub fn rotate() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.rotate", move |ctx, cfg| {
+        #[derive(Serialize, Deserialize, Default)]
+        struct Model {
+            a_rot: usize,
+            b_rot: usize,
+        }
+        let buffer_size = 128;
+        let mut a_q = VecDeque::new();
+        let mut b_q = VecDeque::new();
+        let mut model = Model::default();
+        let mut init = false;
+        let ctl = new_stftfx(ctx, cfg, 2, 2, move |ctl, lock, frames| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_model| model = saved_model);
+                init = true;
+            }
+            if a_q.is_empty() {
+                let write_req_result = lock.write(OutPortID(0), &[buffer_size]);
+                let ok = write_req_result.is_ok();
+                ignore_nonfatal!({write_req_result?});
+                if ok {
+                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(0))? >= buffer_size))?;
+                }
+                ignore_nonfatal!({
+                    let reps = lock.read::<usize>(InPortID(0))?;
+                    a_q.extend(&reps);
+                });
+            }
+            if let Some(rot) = a_q.front().cloned() {
+                model.a_rot = rot;
+                a_q.pop_front();
+            }
+            if b_q.is_empty() {
+                let write_req_result = lock.write(OutPortID(1), &[buffer_size]);
+                let ok = write_req_result.is_ok();
+                ignore_nonfatal!({write_req_result?});
+                if ok {
+                    lock.wait(|lock| Ok(lock.available::<usize>(InPortID(1))? >= buffer_size))?;
+                }
+                ignore_nonfatal!({
+                    let reps = lock.read::<usize>(InPortID(1))?;
+                    b_q.extend(&reps);
+                });
+            }
+            if let Some(rot) = b_q.front().cloned() {
+                model.b_rot = rot;
+                b_q.pop_front();
+            }
+
+            for &mut (_, ref mut frame) in frames {
+                let arr = af::Array::new(&frame, af::Dim4::new(&[frame.len() as u64, 1, 1, 1]));
+                let a = af::real(&arr);
+                let b = af::imag(&arr);
+                let a = af::shift(&a, &[model.a_rot as i32, 1, 1, 1]);
+                let b = af::shift(&b, &[model.b_rot as i32, 1, 1, 1]);
+                let out_arr = af::cplx2(&a, &b, false);
+                out_arr.host(frame);
+            }
+            Ok(())
+        });
+        ctl.node().in_port(InPortID(0)).unwrap().set_name("a rot");
+        ctl.node().in_port(InPortID(1)).unwrap().set_name("b rot");
+        ctl.node().out_port(OutPortID(0)).unwrap().set_name("a rot req");
+        ctl.node().out_port(OutPortID(1)).unwrap().set_name("b rot req");
+        ctl
+    })
+}
+
 
 pub fn backbuffer() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.backbuffer", move |ctx, cfg| {

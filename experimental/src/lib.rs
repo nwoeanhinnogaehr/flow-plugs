@@ -70,5 +70,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         specfx::from_phase_diff(),
         specfx::backbuffer(),
         specfx::resize(),
+        specfx::rotate(),
     ]
 }
