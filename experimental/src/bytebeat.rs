@@ -4,14 +4,21 @@ use flow_synth::control::*;
 use flow_synth::macros;
 use std::sync::Arc;
 
-pub fn beat<T: ByteConvertible + Default + Send + 'static>(name: &str, f: fn(usize) -> T) -> NodeDescriptor {
+pub fn beat<T: ByteConvertible + Default + Send + 'static>(
+    name: &str,
+    f: fn(usize) -> T,
+) -> NodeDescriptor {
     NodeDescriptor::new(
         "bytebeat.".to_string() + name,
         move |ctx: Arc<Context>, cfg: NewNodeConfig| run_beat(f, ctx, cfg),
     )
 }
 
-fn run_beat<T: ByteConvertible + Default + Send + 'static>(f: fn(usize) -> T, ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+fn run_beat<T: ByteConvertible + Default + Send + 'static>(
+    f: fn(usize) -> T,
+    ctx: Arc<Context>,
+    cfg: NewNodeConfig,
+) -> Arc<RemoteControl> {
     let mut t = 0;
     let mut buffer = vec![];
     macros::simple_node(ctx, cfg, (1, 1), vec![], move |node_ctx, _| {

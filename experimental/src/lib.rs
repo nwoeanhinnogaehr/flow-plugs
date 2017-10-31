@@ -2,13 +2,13 @@
 #![feature(core_intrinsics)]
 #![feature(duration_from_micros)]
 
+extern crate arrayfire;
 #[macro_use]
 extern crate flow_synth;
 extern crate modular_flow;
 extern crate rustfft;
 #[macro_use]
 extern crate serde_derive;
-extern crate arrayfire;
 use arrayfire as af;
 
 mod bytebeat;
@@ -53,19 +53,17 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         }),
         bytebeat::beat("kadv", |t| {
             let s = t & t >> 5 | t >> 7;
-            (1.3f32).powf((s * s / 666) as f32  % 32.0) % 22050.0
+            (1.3f32).powf((s * s / 666) as f32 % 32.0) % 22050.0
         }),
         bytebeat::beat("kadv2", |t| {
             let s = t & t >> 5 | t >> 7;
-            (1.2f32).powf((s*s/431) as f32  % 64.0) % 22050.0
+            (1.2f32).powf((s * s / 431) as f32 % 64.0) % 22050.0
         }),
         bytebeat::beat("ksimplei", |t| {
             let s = t & t >> 5 | t >> 7;
             (s % 256) as usize
         }),
-        bytebeat::beat("counter", |t| {
-            t as usize
-        }),
+        bytebeat::beat("counter", |t| t as usize),
         specfx::const_phase_mul(),
         specfx::hold(),
         specfx::to_polar(),
@@ -76,5 +74,7 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         specfx::resize(),
         specfx::rotate(),
         specfx::mix(),
+        specfx::bin_min(),
+        specfx::bin_max(),
     ]
 }
