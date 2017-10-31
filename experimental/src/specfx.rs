@@ -190,6 +190,38 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, Vec<STFTFrame>) -> Re
     ctl
 }
 
+pub fn mix() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.mix", move |ctx, cfg| {
+        let mut mul = 1.0;
+        let mut init = false;
+        let ctl = new_stftfx(ctx, cfg, 0, 0, PortConfig::InManyOutOne, move |ctl, lock, mut frames| {
+            if !init { // ugh
+                let _ = ctl.restore().map(|saved_mul| mul = saved_mul);
+                init = true;
+            }
+            if let Ok(new_mul) = lock.read_n::<f32>(InPortID(0), 1).map(|data| data[0]) {
+                mul = new_mul;
+                ctl.save(mul).unwrap();
+            }
+            let mut out = Vec::new();
+            let mut header = STFTHeader { size: 0, hop: 0 };
+            for &mut (fheader, ref mut frame) in &mut frames {
+
+                // uhh, yeah. this is just a quick hack...
+                header = fheader;
+                out.resize(frame.len(), Complex::<f32>::default());
+
+                for (in_bin, out_bin) in frame.iter().zip(out.iter_mut()) {
+                    out_bin.re += in_bin.re;
+                    out_bin.im += in_bin.im;
+                }
+            }
+            Ok(vec![(header, out)])
+        });
+        ctl
+    })
+}
+
 pub fn const_phase_mul() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.const-phase-mul", move |ctx, cfg| {
         let mut mul = 1.0;

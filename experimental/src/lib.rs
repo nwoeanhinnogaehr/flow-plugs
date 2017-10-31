@@ -55,6 +55,10 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let s = t & t >> 5 | t >> 7;
             (1.3f32).powf((s * s / 666) as f32  % 32.0) % 22050.0
         }),
+        bytebeat::beat("kadv2", |t| {
+            let s = t & t >> 5 | t >> 7;
+            (1.2f32).powf((s*s/431) as f32  % 64.0) % 22050.0
+        }),
         bytebeat::beat("ksimplei", |t| {
             let s = t & t >> 5 | t >> 7;
             (s % 256) as usize
@@ -71,5 +75,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         specfx::backbuffer(),
         specfx::resize(),
         specfx::rotate(),
+        specfx::mix(),
     ]
 }
