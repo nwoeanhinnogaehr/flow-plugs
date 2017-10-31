@@ -52,28 +52,82 @@ impl<T: ByteConvertible> ReqQueue<T> {
     }
 }
 
-fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) -> Result<()> + Send + 'static>(
+enum PortConfig {
+    InOneOutOne,
+    InManyOutOne,
+    InOneOutMany,
+    InManyOutMany,
+}
+
+fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, Vec<STFTFrame>) -> Result<Vec<STFTFrame>> + Send + 'static>(
     ctx: Arc<Context>,
     cfg: NewNodeConfig,
     num_aux_in: usize,
     num_aux_out: usize,
+    port_config: PortConfig,
     mut process: ProcessFn,
 ) -> Arc<RemoteControl> {
     let mut size = 0;
+    let mut messages = Vec::new();
+    match port_config {
+        PortConfig::InManyOutMany =>
+            messages.extend_from_slice(&[
+                message::Desc {
+                    name: "Add in port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Remove in port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Add out port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Remove out port".into(),
+                    args: vec![],
+                },
+            ]),
+        PortConfig::InManyOutOne =>
+            messages.extend_from_slice(&[
+                message::Desc {
+                    name: "Add in port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Remove in port".into(),
+                    args: vec![],
+                },
+            ]),
+        PortConfig::InOneOutMany =>
+            messages.extend_from_slice(&[
+                message::Desc {
+                    name: "Add out port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Remove out port".into(),
+                    args: vec![],
+                },
+            ]),
+        PortConfig::InOneOutOne =>
+            messages.extend_from_slice(&[
+                message::Desc {
+                    name: "Add port".into(),
+                    args: vec![],
+                },
+                message::Desc {
+                    name: "Remove port".into(),
+                    args: vec![],
+                },
+            ]),
+    };
     let ctl = macros::simple_node(
         ctx,
         cfg,
         (1 + num_aux_in, 1 + num_aux_out),
-        vec![
-            message::Desc {
-                name: "Add port".into(),
-                args: vec![],
-            },
-            message::Desc {
-                name: "Remove port".into(),
-                args: vec![],
-            },
-        ],
+        messages,
         move |node_ctx, ctl| {
             let node = node_ctx.node();
             while let Some(msg) = ctl.recv_message() {
@@ -86,6 +140,18 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) -> 
                         && node.out_ports().len() > num_aux_out
                     {
                         node.pop_in_port(ctl.context().graph());
+                        node.pop_out_port(ctl.context().graph());
+                    },
+                    "Add in port" => {
+                        node.push_in_port();
+                    }
+                    "Add out port" => {
+                        node.push_out_port();
+                    }
+                    "Remove in port" => if node.in_ports().len() > num_aux_in {
+                        node.pop_in_port(ctl.context().graph());
+                    },
+                    "Remove out port" => if node.out_ports().len() > num_aux_out {
                         node.pop_out_port(ctl.context().graph());
                     },
                     _ => panic!(),
@@ -109,10 +175,9 @@ fn new_stftfx<ProcessFn: FnMut(&RemoteControl, &NodeGuard, &mut [STFTFrame]) -> 
                 })?;
                 Ok((header, lock.read_n::<Complex<f32>>(in_port.id(), size)?))
             }).collect();
-            let mut frames = frames?;
 
-            process(ctl, &lock, &mut frames)?;
-
+            let frames = process(ctl, &lock, frames?)?;
+            assert_eq!(frames.len(), node.out_ports().len() - num_aux_out);
             for (&(header, ref frame), out_port) in frames.iter()
                 .zip(&node.out_ports()[num_aux_out..])
             {
@@ -129,7 +194,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.const-phase-mul", move |ctx, cfg| {
         let mut mul = 1.0;
         let mut init = false;
-        let ctl = new_stftfx(ctx, cfg, 1, 0, move |ctl, lock, frames| {
+        let ctl = new_stftfx(ctx, cfg, 1, 0, PortConfig::InOneOutOne, move |ctl, lock, mut frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_mul| mul = saved_mul);
                 init = true;
@@ -138,7 +203,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
                 mul = new_mul;
                 ctl.save(mul).unwrap();
             }
-            for &mut (_, ref mut frame) in frames {
+            for &mut (_, ref mut frame) in &mut frames {
                 for bin in frame {
                     let mut phase = bin.arg();
                     let amp = bin.norm();
@@ -146,7 +211,7 @@ pub fn const_phase_mul() -> NodeDescriptor {
                     *bin = Complex::<f32>::from_polar(&amp, &phase);
                 }
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
@@ -162,7 +227,7 @@ pub fn hold() -> NodeDescriptor {
         let mut model = Model::default();
         let mut init = false;
         let mut prev_frames = vec![];
-        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, frames| {
+        let ctl = new_stftfx(ctx, cfg, 2, 0, PortConfig::InOneOutOne, move |ctl, lock, mut frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_model| model = saved_model);
                 init = true;
@@ -189,7 +254,7 @@ pub fn hold() -> NodeDescriptor {
                 }
                 prev_frame.clone_from_slice(&frame);
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
@@ -207,7 +272,7 @@ pub fn resize() -> NodeDescriptor {
             hop: 512,
         };
         let mut init = false;
-        let ctl = new_stftfx(ctx, cfg, 2, 0, move |ctl, lock, frames| {
+        let ctl = new_stftfx(ctx, cfg, 2, 0, PortConfig::InOneOutOne, move |ctl, lock, mut frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_model| model = saved_model);
                 init = true;
@@ -220,7 +285,7 @@ pub fn resize() -> NodeDescriptor {
                 model.hop = new_hop.max(1).min(model.size);
                 ctl.save(&model).unwrap();
             }
-            for &mut (ref mut header, ref mut frame) in frames {
+            for &mut (ref mut header, ref mut frame) in &mut frames {
                 let arr = af::Array::new(&frame, af::Dim4::new(&[frame.len() as u64, 1, 1, 1]));
                 let out_arr = af::resize(&arr, model.size as i64, 1, af::InterpType::BILINEAR);
                 frame.resize(model.size, Complex::<f32>::default());
@@ -228,7 +293,7 @@ pub fn resize() -> NodeDescriptor {
                 header.size = model.size;
                 header.hop = model.hop;
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
@@ -240,7 +305,7 @@ pub fn rotate() -> NodeDescriptor {
         let mut b_rot = 0;
         let mut a_q = ReqQueue::new(InPortID(0), OutPortID(0), 128);
         let mut b_q = ReqQueue::new(InPortID(1), OutPortID(1), 128);
-        let ctl = new_stftfx(ctx, cfg, 2, 2, move |_, lock, frames| {
+        let ctl = new_stftfx(ctx, cfg, 2, 2, PortConfig::InOneOutOne, move |_, lock, mut frames| {
             if let Some(rot) = a_q.next(&lock)? {
                 a_rot = rot;
             }
@@ -248,7 +313,7 @@ pub fn rotate() -> NodeDescriptor {
                 b_rot = rot;
             }
 
-            for &mut (_, ref mut frame) in frames {
+            for &mut (_, ref mut frame) in &mut frames {
                 let arr = af::Array::new(&frame, af::Dim4::new(&[frame.len() as u64, 1, 1, 1]));
                 let a = af::real(&arr);
                 let b = af::imag(&arr);
@@ -257,7 +322,7 @@ pub fn rotate() -> NodeDescriptor {
                 let out_arr = af::cplx2(&a, &b, false);
                 out_arr.host(frame);
             }
-            Ok(())
+            Ok(frames)
         });
         ctl.node().in_port(InPortID(0)).unwrap().set_name("a rot");
         ctl.node().in_port(InPortID(1)).unwrap().set_name("b rot");
@@ -266,7 +331,6 @@ pub fn rotate() -> NodeDescriptor {
         ctl
     })
 }
-
 
 pub fn backbuffer() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.backbuffer", move |ctx, cfg| {
@@ -280,7 +344,7 @@ pub fn backbuffer() -> NodeDescriptor {
         let mut model = Model::default();
         let mut init = false;
         let mut buffers: Vec<Vec<_>> = Vec::new();
-        let ctl = new_stftfx(ctx, cfg, 2, 1, move |ctl, lock, frames| {
+        let ctl = new_stftfx(ctx, cfg, 2, 1, PortConfig::InOneOutOne, move |ctl, lock, mut frames| {
             if !init { // ugh
                 let _ = ctl.restore().map(|saved_model| model = saved_model);
                 init = true;
@@ -318,7 +382,7 @@ pub fn backbuffer() -> NodeDescriptor {
                 }
             }
             write_head += 1;
-            Ok(())
+            Ok(frames)
         });
         ctl.node().in_port(InPortID(0)).unwrap().set_name("size");
         ctl.node().in_port(InPortID(1)).unwrap().set_name("read head");
@@ -329,30 +393,30 @@ pub fn backbuffer() -> NodeDescriptor {
 
 pub fn to_polar() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.to-polar", move |ctx, cfg| {
-        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
-            for &mut (_, ref mut frame) in frames {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, PortConfig::InOneOutOne, move |_, _, mut frames| {
+            for &mut (_, ref mut frame) in &mut frames {
                 for bin in frame {
                     let norm = bin.norm();
                     let arg = bin.arg();
                     *bin = Complex::<f32>::new(norm, arg);
                 }
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
 }
 pub fn from_polar() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.from-polar", move |ctx, cfg| {
-        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
-            for &mut (_, ref mut frame) in frames {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, PortConfig::InOneOutOne, move |_, _, mut frames| {
+            for &mut (_, ref mut frame) in &mut frames {
                 for bin in frame {
                     let norm = bin.re;
                     let arg = bin.im;
                     *bin = Complex::<f32>::from_polar(&norm, &arg);
                 }
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
@@ -362,7 +426,7 @@ pub fn from_polar() -> NodeDescriptor {
 pub fn to_phase_diff() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.to-phase-diff", move |ctx, cfg| {
         let mut prev_phases = Vec::new();
-        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, PortConfig::InOneOutOne, move |_, _, mut frames| {
             prev_phases.resize(frames.len(), Vec::new());
             for (&mut (_, ref mut frame), ref mut prev_phase) in frames.iter_mut().zip(prev_phases.iter_mut()) {
                 prev_phase.resize(frame.len(), 0.0);
@@ -374,7 +438,7 @@ pub fn to_phase_diff() -> NodeDescriptor {
                     *bin = Complex::<f32>::new(norm, diff);
                 }
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
@@ -382,7 +446,7 @@ pub fn to_phase_diff() -> NodeDescriptor {
 pub fn from_phase_diff() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.from-phase-diff", move |ctx, cfg| {
         let mut accum_phases = Vec::new();
-        let ctl = new_stftfx(ctx, cfg, 0, 0, move |_, _, frames| {
+        let ctl = new_stftfx(ctx, cfg, 0, 0, PortConfig::InOneOutOne, move |_, _, mut frames| {
             accum_phases.resize(frames.len(), Vec::new());
             for (&mut (_, ref mut frame), ref mut accum_phase) in frames.iter_mut().zip(accum_phases.iter_mut()) {
                 accum_phase.resize(frame.len(), 0.0);
@@ -393,7 +457,7 @@ pub fn from_phase_diff() -> NodeDescriptor {
                     *bin = Complex::<f32>::from_polar(&norm, accum);
                 }
             }
-            Ok(())
+            Ok(frames)
         });
         ctl
     })
