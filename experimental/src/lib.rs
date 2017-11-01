@@ -76,5 +76,6 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
         specfx::mix(),
         specfx::bin_min(),
         specfx::bin_max(),
+        specfx::freq_split(),
     ]
 }

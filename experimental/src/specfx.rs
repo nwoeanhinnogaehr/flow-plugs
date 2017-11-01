@@ -196,6 +196,28 @@ fn new_stftfx<
     ctl
 }
 
+pub fn freq_split() -> NodeDescriptor {
+    NodeDescriptor::new("SpecFX.freq-split", move |ctx, cfg| {
+        new_stftfx(
+            ctx,
+            cfg,
+            0,
+            0,
+            PortConfig::InOneOutMany,
+            move |ctl, _, mut frames| {
+                assert_eq!(frames.len(), 1);
+                let (header, input) = frames.pop().unwrap();
+                let num_splits = ctl.node().out_ports().len();
+                let mut output = vec![(header, vec![Complex::<f32>::default(); input.len()]); num_splits];
+                for (idx, bin) in input.iter().enumerate() {
+                    output[(num_splits as f32 * (idx as f32 + 1.0).log2() / (input.len() as f32 + 1.0).log2()) as usize].1[idx] = *bin;
+                }
+                Ok(output)
+            },
+        )
+    })
+}
+
 pub fn mix() -> NodeDescriptor {
     NodeDescriptor::new("SpecFX.mix", move |ctx, cfg| {
         let ctl = new_stftfx(
