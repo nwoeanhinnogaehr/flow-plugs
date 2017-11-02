@@ -165,7 +165,7 @@ fn new_istft(ctx: Arc<Context>, config: NewNodeConfig) -> Arc<RemoteControl> {
     ));
     let mut size = 4096;
     let mut hop = 256;
-    let max_size = 1 << 16;
+    let max_size = 1 << 20;
     let mut window: Vec<T> = apodize::hanning_iter(size).map(|x| x.sqrt() as T).collect();
     let ctl = remote_ctl.clone();
     thread::spawn(move || {

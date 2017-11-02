@@ -63,6 +63,15 @@ pub fn get_descriptors() -> Vec<NodeDescriptor> {
             let s = t & t >> 5 | t >> 7;
             (s % 256) as usize
         }),
+        bytebeat::beat("nov1", |t| {
+            let s = t/(1+(t*((t>>15|t>>17^t>>13)&31)&t>>5^t>>9)%(1+(t>>4|t>>12)));
+            (s as f32 / 256.0).sin()
+        }),
+        bytebeat::beat("nov1-2", |t| {
+            let s = t/(1+(t*((t>>15|t>>17^t>>13)&31)&t>>5^t>>8)%(1+(t>>4|t>>12)));
+            (s as f32 / 256.0).sin()
+        }),
+
         bytebeat::beat("counter", |t| t as usize),
         specfx::const_phase_mul(),
         specfx::hold(),
