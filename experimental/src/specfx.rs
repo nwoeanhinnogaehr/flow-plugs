@@ -4,7 +4,7 @@ use flow_synth::control::*;
 use flow_synth::macros;
 use std::sync::Arc;
 use rustfft::num_complex::Complex;
-use std::f32;
+use std::{f32, f64};
 use std::collections::VecDeque;
 use arrayfire as af;
 
@@ -632,6 +632,143 @@ pub fn from_phase_diff() -> NodeDescriptor {
                 Ok(frames)
             },
         );
+        ctl
+    })
+}
+
+trait FreqOsc {
+    fn f(freq: f32, phase: f32) -> Complex<f32>;
+}
+
+struct Sin;
+impl FreqOsc for Sin {
+    fn f(freq: f32, phase: f32) -> Complex<f32> {
+        if freq == 0.0 {
+            Complex::new(0.0, 0.0)
+        } else {
+            //let phase = phase % (32.0 * f32::consts::PI);
+            Complex::from_polar(&(512.0/((freq+1.0)* 32.0+(phase*freq)%512.0)*(phase*freq).sin()), &(phase-freq%(phase%1.0+0.1)*1024.0))
+        }
+    }
+}
+struct Sin2;
+impl FreqOsc for Sin2 {
+    fn f(freq: f32, phase: f32) -> Complex<f32> {
+        if freq == 0.0 {
+            Complex::new(0.0, 0.0)
+        } else {
+            //let phase = phase % (32.0 * f32::consts::PI);
+            Complex::from_polar(&(512.0/((freq+1.0)* 32.0+phase%512.0)), &(phase-freq%0.1*1024.0))
+        }
+    }
+}
+struct Sin3;
+impl FreqOsc for Sin3 {
+    fn f(freq: f32, phase: f32) -> Complex<f32> {
+        if freq == 0.0 {
+            Complex::new(0.0, 0.0)
+        } else {
+            //let phase = phase % (32.0 * f32::consts::PI);
+            Complex::from_polar(&(512.0/((freq+0.1)* 32.0)*(freq*phase*32.0).sin()), &(freq*32.0))
+        }
+    }
+}
+
+pub fn fft_sin3_synth() -> NodeDescriptor {
+    NodeDescriptor::new("STFT.sinSynth3", run_fft_synth::<Sin3>)
+}
+pub fn fft_sin2_synth() -> NodeDescriptor {
+    NodeDescriptor::new("STFT.sinSynth2", run_fft_synth::<Sin2>)
+}
+pub fn fft_sin1_synth() -> NodeDescriptor {
+    NodeDescriptor::new("STFT.sinSynth1", run_fft_synth::<Sin>)
+}
+
+fn run_fft_synth<O: FreqOsc>(ctx: Arc<Context>, cfg: NewNodeConfig) -> Arc<RemoteControl> {
+    let mut phase = 0.0f64;
+    let mut buffer = vec![];
+    let mut freq_q = ReqQueue::new(InPortID(0), OutPortID(0), 128);
+    let mut freq = 0.0f32;
+    let ctl = macros::simple_node(ctx, cfg, (2, 2), vec![], move |node_ctx, _| {
+        let lock = node_ctx.lock_all();
+
+        // wait for request
+        lock.wait(|lock| Ok(lock.available::<STFTHeader>(InPortID(1))? >= 1))?;
+        let header = lock.read_n::<STFTHeader>(InPortID(1), 1)?[0];
+        buffer.resize(header.size, Complex::<f32>::default());
+
+        if let Some(new_freq) = freq_q.next(&lock)? {
+            freq = new_freq;
+        }
+        let max = buffer.len() as f32;
+        for (idx, x) in buffer.iter_mut().enumerate() {
+            *x = O::f(idx as f32 / max, phase as f32);
+            phase += 2.0 * freq as f64 * f64::consts::PI / 44100.0;
+        }
+        lock.write(OutPortID(1), &[header])?;
+        lock.write(OutPortID(1), &buffer)?;
+        Ok(())
+    });
+    ctl.node().in_port(InPortID(0)).unwrap().set_name("freq");
+    ctl.node().in_port(InPortID(1)).unwrap().set_name("wave req");
+    ctl.node().out_port(OutPortID(0)).unwrap().set_name("freq_req");
+    ctl.node().out_port(OutPortID(1)).unwrap().set_name("wave");
+    ctl
+}
+
+pub fn fft_driver() -> NodeDescriptor {
+    NodeDescriptor::new("STFT driver", move |ctx, cfg| {
+        let mut size_q = ReqQueue::new(InPortID(0), OutPortID(0), 1);
+        let mut hop_q = ReqQueue::new(InPortID(1), OutPortID(1), 1);
+        #[derive(Serialize, Deserialize, Default)]
+        struct Model {
+            size: usize,
+            hop: usize,
+        }
+        let mut model = Model {
+            size: 2048,
+            hop: 512,
+        };
+        let mut quota = 0i64;
+        let mut init = false;
+        let ctl = macros::simple_node(ctx, cfg, (3, 3), vec![], move |node_ctx, ctl| {
+            if !init {
+                let _ = ctl.restore().map(|saved_model| model = saved_model);
+                init = true;
+            }
+            let lock = node_ctx.lock_all();
+
+            // wait for request
+            lock.wait(|lock| Ok(lock.available::<usize>(InPortID(2))? >= 1))?;
+            let req_size = lock.read_n::<usize>(InPortID(2), 1)?[0];
+            quota += req_size as i64;
+
+            if let Some(new_size) = size_q.next(&lock)? {
+                model.size = new_size;
+                ctl.save(&model).unwrap();
+            }
+            if let Some(new_hop) = hop_q.next(&lock)? {
+                model.hop = new_hop;
+                ctl.save(&model).unwrap();
+            }
+            let header = STFTHeader {
+                size: model.size,
+                hop: model.hop,
+            };
+
+            while quota > 0 {
+                lock.write(OutPortID(2), &[header])?;
+                quota -= model.hop as i64;
+            }
+
+            Ok(())
+        });
+        ctl.node().in_port(InPortID(0)).unwrap().set_name("size");
+        ctl.node().in_port(InPortID(1)).unwrap().set_name("hop");
+        ctl.node().in_port(InPortID(2)).unwrap().set_name("req");
+        ctl.node().out_port(OutPortID(0)).unwrap().set_name("size req");
+        ctl.node().out_port(OutPortID(1)).unwrap().set_name("hop req");
+        ctl.node().out_port(OutPortID(2)).unwrap().set_name("out");
         ctl
     })
 }
